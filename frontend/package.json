@@ -1,5 +1,5 @@
 {
-  "name": "test",
+  "name": "frontend",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -10,19 +10,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@radix-ui/react-select": "^2.2.2",
-    "@radix-ui/react-slot": "^1.2.0",
     "@types/dom-speech-recognition": "^0.0.6",
     "@types/recordrtc": "^5.6.14",
-    "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.503.0",
-    "mp3-mediarecorder": "^4.0.5",
-    "opus-media-recorder": "^0.8.0",
-    "opus-recorder": "^8.0.5",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "react-hook-form": "^7.56.0",
     "react-select": "^5.10.1",
     "recordrtc": "^5.6.2",
     "tailwind-merge": "^3.2.0"

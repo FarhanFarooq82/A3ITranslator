@@ -3,13 +3,14 @@ import RecordRTC, { StereoAudioRecorder } from 'recordrtc';
 import { Button } from './ui/button';
 import { Textarea } from './ui/textarea';
 import { Input } from './ui/input';
+import LanguageSelector from "./LanguageSelector";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert"
 import { AlertCircle } from "lucide-react"
 
 const RealTimeTranslatorApp = () => {
     const [transcript, setTranscript] = useState<string>('');
     const [interimTranscript, setInterimTranscript] = useState<string>('');
-    const [targetWord, setTargetWord] = useState<string>('example');
+    const [targetWord, setTargetWord] = useState<string>('Listen A3IL');
     const [wordCount, setWordCount] = useState<number>(0);
     const [isListening, setIsListening] = useState<boolean>(false);
     const [isRecording, setIsRecording] = useState<boolean>(false);
@@ -18,6 +19,8 @@ const RealTimeTranslatorApp = () => {
     const [transcription, setTranscription] = useState<string>('');
     const [translation, setTranslation] = useState<string>('');
     const [audioUrl, setAudioUrl] = useState<string | null>(null);
+    const [mainLanguage, setMainLanguage] = useState<string>('');
+    const [otherLanguage, setOtherLanguage] = useState<string>('');
 
     const recognitionRef = useRef<SpeechRecognition | null>(null);
     const RTCRecorderRef = useRef<RecordRTC | null>(null);
@@ -74,8 +77,10 @@ const RealTimeTranslatorApp = () => {
         try {
             // Create FormData and append the blob with specific filename and type
             const formData = new FormData();
-            formData.append('file', audioBlob, 'audio.ogg'); // Note: 'file' matches FastAPI parameter name
-    
+            formData.append('file', audioBlob, 'audio.ogg');
+            formData.append('main_language', mainLanguage);
+            formData.append('other_language', otherLanguage);
+ 
             // Log the blob details for debugging
             console.log('Sending blob:', {
                 size: audioBlob.size,
@@ -244,7 +249,7 @@ const RealTimeTranslatorApp = () => {
                 setError(null);
             };
 
-            recognitionRef.current.onresult = (event) => {
+            recognitionRef.current.onresult = (event: SpeechRecognitionEvent) => {
                 let currentTranscript = '';
                 let currentInterimTranscript = '';
                 for (let i = event.resultIndex; i < event.results.length; ++i) {
@@ -370,6 +375,13 @@ const RealTimeTranslatorApp = () => {
         }
     };
 
+    const languages = [
+  { code: "en-US", name: "English (US)" },
+  { code: "da-DK", name: "Danish (Denmark)" },
+  { code: "ur-PK", name: "Urdu (Pakistan)" },
+  // Add more BCP 47 codes as needed
+];
+
     // Calculate word count whenever transcript or targetWord changes
     useEffect(() => {
         const fullTranscript = (transcript + ' ' + interimTranscript).trim();
@@ -428,7 +440,21 @@ const RealTimeTranslatorApp = () => {
                     className="min-h-[200px] bg-gray-50 border-gray-300 text-gray-700"
                 />
             </div>
-
+            {/* Language Selection */}
+            <div className="flex flex-col md:flex-row gap-4 mb-6">
+                <LanguageSelector
+                    label="Primary Language"
+                    value={mainLanguage}
+                    onChange={setMainLanguage}
+                    options={languages.map(lang => ({ value: lang.code, label: lang.name }))}
+                />
+                <LanguageSelector
+                    label="Target Language"
+                    value={otherLanguage}
+                    onChange={(value) => setOtherLanguage(value)}
+                    options={languages.map(lang => ({ value: lang.code, label: lang.name }))}
+                />
+            </div>
             <div className="mb-4">
                 <Button
                     onClick={toggleRecognition}

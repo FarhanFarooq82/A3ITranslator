@@ -1,9 +1,7 @@
 fastapi
 uvicorn[standard]
-websockets
 pydantic
 google
 google-cloud-speech
 google-cloud-translate
-python-socketio
 pymongo[srv] # Add this line for MongoDB support

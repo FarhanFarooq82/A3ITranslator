@@ -2,12 +2,10 @@ import json
 import logging
 import base64 # Import base64 for encoding
 from datetime import datetime
-from fastapi import FastAPI, UploadFile, HTTPException
+from fastapi import FastAPI, Form, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from google.generativeai import GenerativeModel
 from google.generativeai.types import HarmCategory, HarmBlockThreshold, GenerationConfig
-
-# Import Google Cloud Text-to-Speech
 from google.cloud import texttospeech_v1beta1 as texttospeech # Use v1beta1 for potentially more features
 from google.api_core.exceptions import GoogleAPIError
 
@@ -34,13 +32,17 @@ common_safety_settings = [
     {"category": HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
 ]
 
+main_language: str = "da-DK"
+other_language: str = "ur-PK"
+
 # Your System Prompt for Gemini
 SYSTEM_PROMPT = """Task: Process audio input.
-Languages: 2 user provided languages, English.
+Languages: 1 Main Language and 1 other language is provided by the user.
 Steps:
 1. Identify audio language (must be one of the both provided by user).
 2. Transcribe audio in that language. Include foreign words in transcription.
-3. Contextually translate transcription into the *other* language (user provided) with simple vocabulary. Translate with respect to gender of the speaker.
+3. Contextually translate transcription into the non spoken language from the list (user provided) with simple vocabulary. Translate with respect to gender of the speaker.
+4. If any other language is spoken consider the main Language as a translation language
 Output JSON format:
 {
     "timestamp": "current_time",
@@ -75,7 +77,7 @@ USER_PROMPT_LANGUAGES_TEMPLATE = "User language preferences: {}"
 # returned by Gemini. For this example, we'll use a default based on your prompt languages.
 # Refer to Google Cloud Text-to-Speech documentation for available voices:
 # https://cloud.google.com/text-to-speech/docs/voices
-DEFAULT_TTS_LANGUAGE_CODE = "ur-PK" # Assuming Urdu is a target language from your prompt
+DEFAULT_TTS_LANGUAGE_CODE = main_language# Assuming Urdu is a target language from your prompt
 DEFAULT_TTS_VOICE_GENDER = texttospeech.SsmlVoiceGender.SSML_VOICE_GENDER_UNSPECIFIED # Or MALE, FEMALE
 DEFAULT_AUDIO_ENCODING = texttospeech.AudioEncoding.MP3
 DEFAULT_AUDIO_MIME_TYPE = "audio/mp3"
@@ -112,7 +114,11 @@ def synthesize_text_to_audio(text: str, language_code: str, gender: texttospeech
 
 
 @app.post("/process-audio/")
-async def process_audio(file: UploadFile):
+async def process_audio(
+    file: UploadFile,
+    main_language: str = Form(...),
+    other_language: str = Form(...)
+):
     try:
         logger.info(f"Received file: name={file.filename}, content_type={file.content_type}")
 
@@ -126,7 +132,7 @@ async def process_audio(file: UploadFile):
 
         # User-specific part of the prompt for this request (language pair)
         # You might want to pass these languages from the frontend request
-        current_user_languages = "da-DK, ur-PK" # Example: Danish, Urdu - Make this dynamic
+        current_user_languages = f"Main Language {main_language}, {other_language}"
         user_prompt_text = USER_PROMPT_LANGUAGES_TEMPLATE.format(current_user_languages)
 
         # Prepare prompt parts for Gemini
