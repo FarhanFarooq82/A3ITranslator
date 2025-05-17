@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@radix-ui/react-label": "^2.1.6",
     "@types/dom-speech-recognition": "^0.0.6",
     "@types/recordrtc": "^5.6.14",
     "clsx": "^2.1.1",

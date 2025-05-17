@@ -3,14 +3,23 @@ import RecordRTC, { StereoAudioRecorder } from 'recordrtc';
 import { Button } from './ui/button';
 import { Textarea } from './ui/textarea';
 import { Input } from './ui/input';
-import LanguageSelector from "./LanguageSelector";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert"
 import { AlertCircle } from "lucide-react"
+// First, make sure languages array is defined before the component
+const languages = [
+  { value: "en-US", name: "English (US)" },
+  { value: "da-DK", name: "Danish (Denmark)" },
+  { value: "ur-PK", name: "Urdu (Pakistan)" }
+];
+
 
 const RealTimeTranslatorApp = () => {
+    // Update these state declarations to use the first language as default
+
+    
     const [transcript, setTranscript] = useState<string>('');
     const [interimTranscript, setInterimTranscript] = useState<string>('');
-    const [targetWord, setTargetWord] = useState<string>('Listen A3IL');
+    const [targetWord, setTargetWord] = useState<string>('Listen A3I');
     const [wordCount, setWordCount] = useState<number>(0);
     const [isListening, setIsListening] = useState<boolean>(false);
     const [isRecording, setIsRecording] = useState<boolean>(false);
@@ -19,8 +28,8 @@ const RealTimeTranslatorApp = () => {
     const [transcription, setTranscription] = useState<string>('');
     const [translation, setTranslation] = useState<string>('');
     const [audioUrl, setAudioUrl] = useState<string | null>(null);
-    const [mainLanguage, setMainLanguage] = useState<string>('');
-    const [otherLanguage, setOtherLanguage] = useState<string>('');
+    const [mainLanguage, setMainLanguage] = useState(languages[0].name);
+    const [otherLanguage, setOtherLanguage] = useState(languages[0].name);
 
     const recognitionRef = useRef<SpeechRecognition | null>(null);
     const RTCRecorderRef = useRef<RecordRTC | null>(null);
@@ -29,8 +38,6 @@ const RealTimeTranslatorApp = () => {
     const analyserRef = useRef<AnalyserNode | null>(null);
     const silenceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const silenceDetectionActiveRef = useRef<boolean>(false);
-    const silenceThreshold = 0.02;
-    const silenceDuration = 2500;
     const backendApiUrl = 'http://localhost:8000/process-audio'; // Replace with your backend API URL
 
     const playAudio = (audioBlob: Blob) => {
@@ -75,6 +82,12 @@ const RealTimeTranslatorApp = () => {
     }
     const sendAudioToBackend = async (audioBlob: Blob): Promise<any> => {
         try {
+
+            console.log('Languages when sending to backend:', {
+            main: mainLanguage,
+            other: otherLanguage
+            });
+
             // Create FormData and append the blob with specific filename and type
             const formData = new FormData();
             formData.append('file', audioBlob, 'audio.ogg');
@@ -164,41 +177,79 @@ const RealTimeTranslatorApp = () => {
         }
     }, [backendApiUrl]);
     
+    // Add these constants at the top with other constants
+    const SILENCE_THRESHOLD = 0.05; // Adjustable threshold
+    const SILENCE_DURATION = 3000; // 3 seconds in milliseconds
+    const SAMPLE_RATE = 100; // How often to check for silence (ms)
+    const BUFFER_SIZE = 30; // Keep track of last 30 samples (3 seconds worth at 100ms intervals)
+
+    // Replace the existing startSilenceDetection function
     const startSilenceDetection = (stream: MediaStream) => {
         if (!analyserRef.current) return;
-    
+
         const data = new Uint8Array(analyserRef.current.frequencyBinCount);
-        silenceDetectionActiveRef.current = true; // Activate silence detection
-    
+        const volumeBuffer: number[] = []; // Rolling buffer of volume levels
+        silenceDetectionActiveRef.current = true;
+
+        let lastCheckTime = Date.now();
+
         const checkSilence = () => {
-            // Stop the loop if silence detection is no longer active
             if (!analyserRef.current || !silenceDetectionActiveRef.current) return;
-    
-            analyserRef.current.getByteFrequencyData(data);
-            let sum = 0;
-            for (let i = 0; i < data.length; i++) {
-                sum += data[i];
-            }
-            const average = sum / data.length;
-            const normalizedAverage = average / 256;
-            console.log("DataLength :", data.length,"Average volume:", average, "Normalized average:", normalizedAverage);
-            if (normalizedAverage < silenceThreshold) {
-                if (!silenceTimeoutRef.current) {
-                    silenceTimeoutRef.current = setTimeout(() => {
-                        console.log("Silence detected, stopping recording");
-                        stopAudioRecording(stream); // Stop recording
-                        silenceTimeoutRef.current = null;
-                    }, silenceDuration);
+
+            const currentTime = Date.now();
+            // Only sample at specified rate
+            if (currentTime - lastCheckTime >= SAMPLE_RATE) {
+                analyserRef.current.getByteFrequencyData(data);
+                
+                // Calculate RMS (Root Mean Square) volume
+                let sumOfSquares = 0;
+                for (let i = 0; i < data.length; i++) {
+                    sumOfSquares += data[i] * data[i];
                 }
-            } else {
-                clearSilenceTimeout();
+                const rms = Math.sqrt(sumOfSquares / data.length);
+                const normalizedRMS = rms / 256;
+
+                // Add to rolling buffer
+                volumeBuffer.push(normalizedRMS);
+                if (volumeBuffer.length > BUFFER_SIZE) {
+                    volumeBuffer.shift();
+                }
+
+                // Calculate moving average
+                const averageVolume = volumeBuffer.reduce((a, b) => a + b, 0) / volumeBuffer.length;
+
+                console.log("Average volume:", averageVolume, "Buffer size:", volumeBuffer.length);
+
+                // Check if we have enough samples and the average is below threshold
+                if (volumeBuffer.length === BUFFER_SIZE && averageVolume < SILENCE_THRESHOLD) {
+                    if (!silenceTimeoutRef.current) {
+                        console.log("Potential silence detected, starting countdown");
+                        silenceTimeoutRef.current = setTimeout(() => {
+                            // Double-check the latest samples before stopping
+                            const recentAverage = volumeBuffer
+                                .slice(-10) // Check last second (10 samples)
+                                .reduce((a, b) => a + b, 0) / 10;
+                                
+                            if (recentAverage < SILENCE_THRESHOLD) {
+                                console.log("Silence confirmed, stopping recording");
+                                stopAudioRecording(stream);
+                            } else {
+                                console.log("False silence detected, continuing");
+                                clearSilenceTimeout();
+                            }
+                        }, SILENCE_DURATION);
+                    }
+                } else {
+                    clearSilenceTimeout();
+                }
+
+                lastCheckTime = currentTime;
             }
-    
-            // Continue the loop
+
             requestAnimationFrame(checkSilence);
         };
-    
-        checkSilence(); // Start the loop
+
+        checkSilence();
     };
 
     const clearSilenceTimeout = () => {
@@ -243,6 +294,8 @@ const RealTimeTranslatorApp = () => {
             recognitionRef.current.continuous = true;
             recognitionRef.current.interimResults = true;
             recognitionRef.current.lang = 'en-US';
+            console.log('Setting recognition language to:', mainLanguage);
+
 
             recognitionRef.current.onstart = () => {
                 setIsListening(true);
@@ -374,13 +427,7 @@ const RealTimeTranslatorApp = () => {
             }
         }
     };
-
-    const languages = [
-  { code: "en-US", name: "English (US)" },
-  { code: "da-DK", name: "Danish (Denmark)" },
-  { code: "ur-PK", name: "Urdu (Pakistan)" },
-  // Add more BCP 47 codes as needed
-];
+        
 
     // Calculate word count whenever transcript or targetWord changes
     useEffect(() => {
@@ -441,19 +488,29 @@ const RealTimeTranslatorApp = () => {
                 />
             </div>
             {/* Language Selection */}
+            {/* Using native select elements and handling state changes */}
             <div className="flex flex-col md:flex-row gap-4 mb-6">
-                <LanguageSelector
-                    label="Primary Language"
-                    value={mainLanguage}
-                    onChange={setMainLanguage}
-                    options={languages.map(lang => ({ value: lang.code, label: lang.name }))}
-                />
-                <LanguageSelector
-                    label="Target Language"
+                <div>
+                    <label htmlFor="main-lang-select" className="block text-sm font-medium text-gray-700">Main Language (Speech Recognition):</label>
+                    <select value={mainLanguage} onChange={e => setMainLanguage(e.target.value)}>
+                    {languages.map(lang => (
+                        <option key={lang.value} value={lang.value}>{lang.name}</option>
+                    ))}
+                    </select>
+                </div>
+                <div>
+                    <label htmlFor="other-lang-select" className="block text-sm font-medium text-gray-700">Other Language (Translation Target):</label>
+                    <select
+                    id="other-lang-select"
                     value={otherLanguage}
-                    onChange={(value) => setOtherLanguage(value)}
-                    options={languages.map(lang => ({ value: lang.code, label: lang.name }))}
-                />
+                    onChange={e => setOtherLanguage(e.target.value)}
+                    className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md"
+                    >
+                    {languages.map(lang => (
+                        <option key={lang.value} value={lang.value}>{lang.name}</option>
+                    ))}
+                    </select>
+                </div>
             </div>
             <div className="mb-4">
                 <Button
