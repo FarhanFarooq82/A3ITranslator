@@ -32,8 +32,8 @@ common_safety_settings = [
     {"category": HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
 ]
 
-main_language1: str = "da-DK"
-other_language1: str = "ur-PK"
+# main_language1: str = "da-DK"
+# other_language1: str = "ur-PK"
 
 # Your System Prompt for Gemini
 SYSTEM_PROMPT = """Task: Process audio input.
@@ -77,7 +77,7 @@ USER_PROMPT_LANGUAGES_TEMPLATE = "User language preferences: {}"
 # returned by Gemini. For this example, we'll use a default based on your prompt languages.
 # Refer to Google Cloud Text-to-Speech documentation for available voices:
 # https://cloud.google.com/text-to-speech/docs/voices
-DEFAULT_TTS_LANGUAGE_CODE = main_language1# Assuming Urdu is a target language from your prompt
+DEFAULT_TTS_LANGUAGE_CODE = 'da-DK'# Assuming Urdu is a target language from your prompt
 DEFAULT_TTS_VOICE_GENDER = texttospeech.SsmlVoiceGender.SSML_VOICE_GENDER_UNSPECIFIED # Or MALE, FEMALE
 DEFAULT_AUDIO_ENCODING = texttospeech.AudioEncoding.MP3
 DEFAULT_AUDIO_MIME_TYPE = "audio/mp3"
@@ -132,7 +132,7 @@ async def process_audio(
 
         # User-specific part of the prompt for this request (language pair)
         # You might want to pass these languages from the frontend request
-        current_user_languages = f"Main Language {main_language1}, {other_language1}"
+        current_user_languages = f"Main Language {main_language}, {other_language}"
         user_prompt_text = USER_PROMPT_LANGUAGES_TEMPLATE.format(current_user_languages)
 
         # Prepare prompt parts for Gemini
