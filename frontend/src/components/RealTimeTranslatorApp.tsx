@@ -7,9 +7,24 @@ import { Alert, AlertDescription, AlertTitle } from "./ui/alert"
 import { AlertCircle } from "lucide-react"
 
 const languages = [
-  { value: "en-US", name: "English (US)" },
-  { value: "da-DK", name: "Danish (Denmark)" },
-  { value: "ur-PK", name: "Urdu (Pakistan)" }
+    { value: "en-US", name: "English (US)" },
+    { value: "da-DK", name: "Danish (Denmark)" },
+    { value: "ur-PK", name: "Urdu (Pakistan)" },  
+    { value: "pa-IN", name: "Punjabi (India)" },
+    { value: "es-ES", name: "Spanish (Spain)" },
+    { value: "fr-FR", name: "French (France)" },
+    { value: "de-DE", name: "German (Germany)" },
+    { value: "it-IT", name: "Italian (Italy)" },
+    { value: "ja-JP", name: "Japanese (Japan)" },
+    { value: "ko-KR", name: "Korean (South Korea)" },
+    { value: "zh-CN", name: "Chinese (Simplified)" },
+    { value: "zh-TW", name: "Chinese (Traditional)" },
+    { value: "ar-SA", name: "Arabic (Saudi Arabia)" },
+    { value: "pt-BR", name: "Portuguese (Brazil)" },
+    { value: "ru-RU", name: "Russian (Russia)" },
+    { value: "tr-TR", name: "Turkish (Turkey)" },
+    { value: "nl-NL", name: "Dutch (Netherlands)" },
+    { value: "sv-SE", name: "Swedish (Sweden)" },
 ];
 
 const SILENCE_THRESHOLD = 0.05;
@@ -244,8 +259,15 @@ const RealTimeTranslatorApp = () => {
         }
       };
       recognitionRef.current.onerror = (event: SpeechRecognitionErrorEvent) => {
-        setError('Speech recognition error: ' + event.error);
-        setIsListening(false);
+        if (event.error === 'no-speech') {
+            setStatus('No speech detected, restarting listening...');
+            setTimeout(() => {
+            startListening();
+            }, 500); // small delay before restarting
+        } else {
+            setError('Speech recognition error: ' + event.error);
+            setIsListening(false);
+        }
       };
       recognitionRef.current.onend = () => {
         setIsListening(false);
