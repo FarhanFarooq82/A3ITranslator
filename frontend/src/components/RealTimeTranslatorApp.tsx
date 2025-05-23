@@ -5,6 +5,8 @@ import { Textarea } from './ui/textarea';
 import { Input } from './ui/input';
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert"
 import { AlertCircle } from "lucide-react"
+import LanguageSelector from './LanguageSelector';
+import ControlButtons from './ControlButtons';
 
 const languages = [
     { value: "en-US", name: "English (US)" },
@@ -34,22 +36,28 @@ const BUFFER_SIZE = 30;
 
 const RealTimeTranslatorApp = () => {
   // State
-  const [transcript, setTranscript] = useState('');
-  const [interimTranscript, setInterimTranscript] = useState('');
-  const [targetWord, setTargetWord] = useState('Listen A3I');
-  const [wordCount, setWordCount] = useState(0);
+  console.log("MOUNTED: RealTimeTranslatorApp");
+  const [targetWord, setTargetWord] = useState('Translate');
   const [isListening, setIsListening] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isProcessingStop, setIsProcessingStop] = useState(false);
-  const [transcription, setTranscription] = useState('');
   const [translation, setTranslation] = useState('');
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [mainLanguage, setMainLanguage] = useState(languages[0].value);
   const [otherLanguage, setOtherLanguage] = useState(languages[1].value);
   const [status, setStatus] = useState('');
   const [silenceCountdown, setSilenceCountdown] = useState<number | null>(null);
+  const [transcription, setTranscription] = useState('');
+  const [completeTranscription, setCompleteTranscription] = useState('');
+  // UI state: show session start controls only at first
+  const [sessionStarted, setSessionStarted] = useState(false);
+  // Session ID state
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  // Confirmation dialog state
+  const [showEndSessionConfirm, setShowEndSessionConfirm] = useState(false);
+
 
   // Refs
   const recognitionRef = useRef<SpeechRecognition | null>(null);
@@ -75,9 +83,195 @@ const RealTimeTranslatorApp = () => {
     return new Blob([byteArray], { type: contentType });
   }
 
+  // Helper to generate a session ID
+  function generateSessionId() {
+    return (
+      Date.now().toString(36) +
+      '-' +
+      Math.random().toString(36).substring(2, 10)
+    );
+  }
+
+  // --- Workflow State ---
+  // isListening: true when listening for trigger word
+  // isRecording: true when recording audio
+  // isPlaying: true when playing translation audio
+
+  // --- UI Button Logic ---
+  // Show Record button when listening for trigger word (isListening && !isRecording && !isPlaying)
+  // Show Translate button when recording (isRecording && !isPlaying)
+
+  // --- Workflow Functions ---
+
+  // Start listening for trigger word (after session start or after translation playback)
+
+    // Start session handler
+  const handleStartSession = (e) => {
+    console.log("handleStartSession called");
+    e.preventDefault?.();
+    let id = sessionId;
+    if (!id) {
+      id = generateSessionId();
+      const expiry = Date.now() + 2 * 60 * 60 * 1000; // 2 hours
+      localStorage.setItem('a3i_session', JSON.stringify({ id, expiry }));
+      setSessionId(id);
+      setSessionStarted(true);
+    }
+    console.log('sessionStarted startsession', sessionStarted,'islistening',isListening);
+    startListening();
+    console.log('sessionStarted before',sessionStarted,'islistening',isListening);
+  };
+
+
+  const startListening = async () => {
+    setStatus('Listening for trigger word...');
+    setIsListening(true);
+    setupRecognition();
+  };
+
+  // Setup recognition for trigger word
+  const setupRecognition = () => {
+    if ('webkitSpeechRecognition' in window) {
+      recognitionRef.current = new webkitSpeechRecognition();
+      recognitionRef.current.continuous = true;
+      recognitionRef.current.interimResults = true;
+      recognitionRef.current.lang = mainLanguage;
+      recognitionRef.current.onstart = () => {
+        setError(null);
+      };
+      recognitionRef.current.onresult = (event: SpeechRecognitionEvent) => {
+        let currentTranscript = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            currentTranscript += event.results[i][0].transcript;
+          }
+        }
+        const lowerCaseTranscript = currentTranscript.toLowerCase();
+        const lowerCaseTargetWord = targetWord.toLowerCase();
+        if (lowerCaseTranscript.includes(lowerCaseTargetWord)) {
+          setStatus('Trigger word detected! Recording...');
+          recognitionRef.current?.stop();
+          setIsListening(false);
+          startRecording();
+        }
+      };
+      recognitionRef.current.onerror = (event: SpeechRecognitionErrorEvent) => {
+        if (event.error === 'no-speech') {
+          setStatus('Listening for trigger word...npm run dve');
+          console.log('sessionStarted recog ref no speech error', sessionStarted);
+          setTimeout(() => {
+            startListening();
+          }, 100);
+        } else {
+          setError('Speech recognition error: ' + event.error);
+          setIsListening(false);
+        }
+      };
+      recognitionRef.current.onend = () => {
+        setIsListening(false);
+      };
+      recognitionRef.current.start();
+    } else {
+      setError('Web Speech API is not supported in this browser.');
+    }
+  };
+
+  // Start recording (from trigger word or manual Record button)
+const startRecording = async () => {
+    setStatus('Recording...');
+    setIsRecording(true);
+    setIsListening(false);
+    setIsPlaying(false);
+    if (recognitionRef.current) recognitionRef.current.stop();
+
+    let stream: MediaStream;
+    try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    activeStreamRef.current = stream;
+    } catch (err) {
+      setError('No audio stream available for recording.');
+      setIsRecording(false);
+      return;
+    }
+    audioChunksRef.current = [];
+    try {
+      const audioContext = new AudioContext();
+      audioContextRef.current = audioContext;
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 2048;
+      analyserRef.current = analyser;
+      source.connect(analyser);
+      RTCRecorderRef.current = new RecordRTC(stream, {
+        type: 'audio',
+        mimeType: 'audio/ogg',
+        recorderType: StereoAudioRecorder,
+        numberOfAudioChannels: 1,
+        desiredSampRate: 16000,
+        timeSlice: 1000,
+        ondataavailable: (blob: Blob) => {
+          if (blob.size > 0) {
+            audioChunksRef.current.push(blob);
+          }
+        }
+      });
+      RTCRecorderRef.current.startRecording();
+      startSilenceDetection();
+    } catch (error) {
+      setError('Error during recording: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      setIsRecording(false);
+    }
+  };
+
+  // Stop recording (from silence or manual Translate button)
+  const stopAudioRecording = useCallback(() => {
+    if (RTCRecorderRef.current && !isProcessingStop) {
+      RTCRecorderRef.current.stopRecording(() => {
+        const blob = RTCRecorderRef.current?.getBlob();
+        if (blob) {
+          setIsProcessingStop(true);
+          sendAudioToBackend(blob)
+            .then(handleApiResponse)
+            .catch(error => {
+              setError('Failed to send audio to backend: ' + (error instanceof Error ? error.message : 'Unknown error'));
+            })
+            .finally(() => {
+              setIsProcessingStop(false);
+              setIsRecording(false);
+              RTCRecorderRef.current?.destroy();
+              RTCRecorderRef.current = null;
+            });
+        }
+      });
+    }
+    silenceDetectionActiveRef.current = false;
+    clearSilenceTimeout();
+    if (activeStreamRef.current) {
+      activeStreamRef.current.getTracks().forEach(track => track.stop());
+      activeStreamRef.current = null;
+    }
+  }, [isProcessingStop]);
+
+  // Manual Record button handler
+  const handleManualRecord = async () => {
+    console.log("handleManualRecord called");
+    if (isListening && !isRecording && !isPlaying) {
+      await startRecording();
+    }
+  };
+
+  // Manual Translate button handler
+  const handleManualTranslate = () => {
+    console.log("handleManualTranslate called");
+    if (isRecording && !isPlaying) {
+      setStatus('Translating...');
+      stopAudioRecording();
+    }
+  };
+
   // Play audio and restart listening after playback
-  const playAudio = (audioBlob: Blob) => {
-    setStatus('Playing...');
+  const playAudio = (audioBlob: Blob, caption : string ) => {
+    setStatus(caption);
     setIsPlaying(true);
     const url = URL.createObjectURL(audioBlob);
     setAudioUrl(url);
@@ -87,21 +281,26 @@ const RealTimeTranslatorApp = () => {
       setIsPlaying(false);
       setStatus('');
       setAudioUrl(null);
-      startListening();
+      console.log('sessionStarted play', sessionStarted);
+      if (sessionStarted) {
+        startListening();
+      }
       URL.revokeObjectURL(url);
     };
   };
 
   // Handle backend response
   const handleApiResponse = (response: any) => {
-    setTranscription(response.transcription || '');
     setTranslation(response.translation || '');
     if (response.translation_audio && response.translation_audio_mime_type) {
       const audioBlob = b64toBlob(response.translation_audio, response.translation_audio_mime_type);
-      playAudio(audioBlob);
+      playAudio(audioBlob,response.translation);
     } else {
       setAudioUrl(null);
-      startListening();
+      console.log('sessionStarted hapir', sessionStarted);
+      if (sessionStarted) {
+        startListening();
+      }
     }
   };
 
@@ -198,231 +397,79 @@ const RealTimeTranslatorApp = () => {
     }
   };
 
-  // Start listening for trigger word
-  const startListening = async () => {
-    setStatus('Listening for trigger word...');
-    setIsListening(true);
+  
+  // Stop session logic
+  const handleStopSession = () => {
+    console.log("handleStopSession called");
+    setShowEndSessionConfirm(true);
+  };
+
+  // Confirm end session
+  const confirmEndSession = () => {
+    console.log("confirmEndSession called");
+    setSessionStarted(false);
+    setSessionId(null);
+    localStorage.removeItem('a3i_session');
+    setTargetWord('Translate');
+    setIsListening(false);
     setIsRecording(false);
     setIsPlaying(false);
-    setTranscript('');
-    setInterimTranscript('');
+    setError(null);
+    setIsProcessingStop(false);
+    setTranslation('');
     setAudioUrl(null);
-
-    // Clean up previous stream
-    if (activeStreamRef.current) {
-      activeStreamRef.current.getTracks().forEach(track => track.stop());
-      activeStreamRef.current = null;
-    }
-
-    // Get mic stream for recognition
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      activeStreamRef.current = stream;
-      setupRecognition();
-    } catch (err) {
-      setError('Microphone access denied or unavailable.');
-      setIsListening(false);
-    }
-  };
-
-  // Setup recognition with a stream
-  const setupRecognition = () => {
-    if ('webkitSpeechRecognition' in window) {
-      recognitionRef.current = new webkitSpeechRecognition();
-      recognitionRef.current.continuous = true;
-      recognitionRef.current.interimResults = true;
-      recognitionRef.current.lang = 'en-US';
-      recognitionRef.current.onstart = () => {
-        setIsListening(true);
-        setError(null);
-      };
-      recognitionRef.current.onresult = (event: SpeechRecognitionEvent) => {
-        let currentTranscript = '';
-        let currentInterimTranscript = '';
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          if (event.results[i].isFinal) {
-            currentTranscript += event.results[i][0].transcript;
-          } else {
-            currentInterimTranscript += event.results[i][0].transcript + ' ';
-          }
-        }
-        setTranscript((prevTranscript) => prevTranscript + currentTranscript);
-        setInterimTranscript(currentInterimTranscript);
-
-        const lowerCaseTranscript = currentTranscript.toLowerCase();
-        const lowerCaseTargetWord = targetWord.toLowerCase();
-        if (lowerCaseTranscript.includes(lowerCaseTargetWord)) {
-          setStatus('Trigger word detected! Recording...');
-          recognitionRef.current?.stop();
-          setIsListening(false);
-          startRecording();
-        }
-      };
-      recognitionRef.current.onerror = (event: SpeechRecognitionErrorEvent) => {
-        if (event.error === 'no-speech') {
-            setStatus('No speech detected, restarting listening...');
-            setTimeout(() => {
-            startListening();
-            }, 500); // small delay before restarting
-        } else {
-            setError('Speech recognition error: ' + event.error);
-            setIsListening(false);
-        }
-      };
-      recognitionRef.current.onend = () => {
-        setIsListening(false);
-        setInterimTranscript('');
-      };
-      recognitionRef.current.start();
-    } else {
-      setError('Web Speech API is not supported in this browser.');
-    }
-  };
-
-  // Start recording (from trigger word or manual)
-  const startRecording = async () => {
-    setStatus('Recording...');
-    setIsRecording(true);
-    setIsListening(false);
-
-    // Stop recognition stream if running
+    setStatus('');
+    setSilenceCountdown(null);
+    // Stop and release all refs
     if (recognitionRef.current) {
       recognitionRef.current.stop();
+      recognitionRef.current = null;
     }
-
-    // Use the active stream for recording
-    const stream = activeStreamRef.current;
-    if (!stream) {
-      setError('No audio stream available for recording.');
-      setIsRecording(false);
-      return;
-    }
-    audioChunksRef.current = [];
-    try {
-      const audioContext = new AudioContext();
-      audioContextRef.current = audioContext;
-      const source = audioContext.createMediaStreamSource(stream);
-      const analyser = audioContext.createAnalyser();
-      analyser.fftSize = 2048;
-      analyserRef.current = analyser;
-      source.connect(analyser);
-
-      RTCRecorderRef.current = new RecordRTC(stream, {
-        type: 'audio',
-        mimeType: 'audio/ogg',
-        recorderType: StereoAudioRecorder,
-        numberOfAudioChannels: 1,
-        desiredSampRate: 16000,
-        timeSlice: 1000,
-        ondataavailable: (blob: Blob) => {
-          if (blob.size > 0) {
-            audioChunksRef.current.push(blob);
-          }
-        }
-      });
-      RTCRecorderRef.current.startRecording();
-      startSilenceDetection();
-    } catch (error) {
-      setError('Error during recording: ' + (error instanceof Error ? error.message : 'Unknown error'));
-      setIsRecording(false);
-    }
-  };
-
-  // Stop recording (from silence or manual)
-  const stopAudioRecording = useCallback(() => {
-    if (RTCRecorderRef.current && !isProcessingStop) {
+    if (RTCRecorderRef.current) {
       RTCRecorderRef.current.stopRecording(() => {
-        const blob = RTCRecorderRef.current?.getBlob();
-        if (blob) {
-          setIsProcessingStop(true);
-          sendAudioToBackend(blob)
-            .then(handleApiResponse)
-            .catch(error => {
-              setError('Failed to send audio to backend {}: ' + (error instanceof Error ? error.message : 'Unknown error'));
-            })
-            .finally(() => {
-              setIsProcessingStop(false);
-              RTCRecorderRef.current?.destroy();
-              RTCRecorderRef.current = null;
-            });
-        }
+        RTCRecorderRef.current?.destroy();
+        RTCRecorderRef.current = null;
       });
+    }
+    if (audioContextRef.current?.state !== 'closed') {
+      audioContextRef.current?.close().catch(() => {});
+      audioContextRef.current = null;
     }
     silenceDetectionActiveRef.current = false;
     clearSilenceTimeout();
+    if (silenceCountdownIntervalRef.current) {
+      clearInterval(silenceCountdownIntervalRef.current);
+      silenceCountdownIntervalRef.current = null;
+    }
     if (activeStreamRef.current) {
       activeStreamRef.current.getTracks().forEach(track => track.stop());
       activeStreamRef.current = null;
     }
-  }, [isProcessingStop]);
-
-  // Manual record button
-  const handleManualRecord = async () => {
-    setStatus('Recording...');
-    setIsRecording(true);
-    setIsListening(false);
-
-    // If already have a stream, use it; otherwise, get a new one
-    let stream = activeStreamRef.current;
-    if (!stream) {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: { noiseSuppression: true, echoCancellation: true },
-        });
-        activeStreamRef.current = stream;
-      } catch (err) {
-        setError('Error starting manual recording: ' + (err instanceof Error ? err.message : 'Unknown error'));
-        setIsRecording(false);
-        return;
-      }
-    }
-    startRecording();
+    setShowEndSessionConfirm(false);
   };
 
-  // Manual translate button
-  const handleManualTranslate = () => {
-    setStatus('Translating...');
-    setIsRecording(false);
-    stopAudioRecording();
+  // Cancel end session
+  const cancelEndSession = () => {
+    console.log("cancelEndSession called");
+    setShowEndSessionConfirm(false);
   };
 
-  // Start/Stop recognition button
-  const toggleRecognition = () => {
-    if (isListening) {
-      recognitionRef.current?.stop();
-      setIsListening(false);
-      setStatus('');
-    } else {
-      startListening();
-    }
-  };
-
-  // Word count effect
-  useEffect(() => {
-    const fullTranscript = (transcript + ' ' + interimTranscript).trim();
-    const lowerCaseTranscript = fullTranscript.toLowerCase();
-    const lowerCaseTargetWord = targetWord.toLowerCase();
-    const targetWords = lowerCaseTargetWord.split(' ');
-    let count = 0;
-    if (targetWords.length === 1) {
-      const words = lowerCaseTranscript.split(/\s+/);
-      for (const word of words) {
-        if (word === lowerCaseTargetWord) count++;
-      }
-    } else {
-      const phrase = targetWords.join(' ');
-      let index = lowerCaseTranscript.indexOf(phrase);
-      while (index !== -1) {
-        count++;
-        index = lowerCaseTranscript.indexOf(phrase, index + phrase.length);
+    useEffect(() => {
+    console.log("EFFECT: session restore useEffect");
+    const session = localStorage.getItem('a3i_session');
+    if (session) {
+      const { id, expiry } = JSON.parse(session);
+      if (Date.now() < expiry) {
+        setSessionId(id);
+        setSessionStarted(true);
       }
     }
-    setWordCount(count);
-  }, [transcript, targetWord, interimTranscript]);
+  }, []);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
+      console.log("EFFECT: RealTimeTranslatorApp cleanup on unmount");
       recognitionRef.current = null;
       if (RTCRecorderRef.current) {
         RTCRecorderRef.current.stopRecording(() => {
@@ -447,101 +494,121 @@ const RealTimeTranslatorApp = () => {
     };
   }, []);
 
-  // Button visibility logic
-  const showStartListening = !isListening && !isRecording && !isPlaying;
-  const showRecord = isListening && !isRecording && !isPlaying;
-  const showTranslate = isRecording && !isPlaying;
+  // Button visibility logic (updated for session)
+  const showStartSession = !sessionStarted;
+  const showMainUI = sessionStarted;
+  const showStopSession = sessionStarted; // Only show Stop Session after session started
+  const showRecord = showMainUI && isListening && !isRecording && !isPlaying;
+  const showTranslate = showMainUI && isRecording && !isPlaying;
 
-  return (
+  // --- UI ---
+  return ( 
     <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-start p-4">
-      <h1 className="text-3xl font-bold mb-6 text-gray-800">Real Time Translator</h1>
-      <div>
-        <h3>Transcription</h3>
-        <Textarea value={transcription} readOnly />
-        <h3>Translation</h3>
-        <Textarea value={translation} readOnly />
-        {audioUrl && (
-          <div>
-            <h3>Translation Audio</h3>
-            <audio controls src={audioUrl}></audio>
+      <h1 className="text-3xl font-bold mb-6 text-gray-800">A3I Translator</h1>
+      {/* Add a global log for every render */}
+      <div style={{position:'fixed',top:0,right:0,background:'#fff',zIndex:9999,fontSize:'10px',padding:'2px'}}>Check console for logs</div>
+      {/* End Session Confirmation Dialog - overlays everything else when visible */}
+      {showEndSessionConfirm ? (
+        <SessionDialog onCancel={cancelEndSession} onConfirm={confirmEndSession} />
+      ) : (
+        <>
+          {/* Stop Session Button - only visible after session started */}
+          {showStopSession && (
+            <div className="w-full flex justify-end mb-2">
+              <Button onClick={handleStopSession} variant="destructive" size="sm">
+                Stop Session
+              </Button>
+            </div>
+          )}
+          {/* Language Selection - always visible */}
+          <div className="flex flex-col md:flex-row gap-4 mb-6">
+            <LanguageSelector
+              label="Main Language (Speech Recognition):"
+              value={mainLanguage}
+              onChange={setMainLanguage}
+              options={languages.map(l => ({ value: l.value, label: l.name }))}
+            />
+            <LanguageSelector
+              label="Other Language (Translation Target):"
+              value={otherLanguage}
+              onChange={setOtherLanguage}
+              options={languages.map(l => ({ value: l.value, label: l.name }))}
+            />
           </div>
-        )}
-      </div>
-      <div className="mb-4 w-full max-w-md">
-        <Input
-          type="text"
-          placeholder="Enter target word(s)"
-          value={targetWord}
-          onChange={(e) => setTargetWord(e.target.value)}
-          className="mb-2"
-        />
-        <Textarea
-          value={transcript + ' ' + interimTranscript}
-          readOnly
-          placeholder="Transcription will appear here..."
-          className="min-h-[200px] bg-gray-50 border-gray-300 text-gray-700"
-        />
-      </div>
-      {/* Language Selection */}
-      <div className="flex flex-col md:flex-row gap-4 mb-6">
-        <div>
-          <label htmlFor="main-lang-select" className="block text-sm font-medium text-gray-700">Main Language (Speech Recognition):</label>
-          <select value={mainLanguage} onChange={e => setMainLanguage(e.target.value)}>
-            {languages.map(lang => (
-              <option key={lang.value} value={lang.value}>{lang.name}</option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label htmlFor="other-lang-select" className="block text-sm font-medium text-gray-700">Other Language (Translation Target):</label>
-          <select
-            id="other-lang-select"
-            value={otherLanguage}
-            onChange={e => setOtherLanguage(e.target.value)}
-            className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md"
-          >
-            {languages.map(lang => (
-              <option key={lang.value} value={lang.value}>{lang.name}</option>
-            ))}
-          </select>
-        </div>
-      </div>
-      {/* Main control buttons */}
-      <div className="mb-4">
-        {showStartListening && (
-          <Button onClick={toggleRecognition} size="lg">
-            Start Listening
-          </Button>
-        )}
-        {showRecord && (
-          <Button onClick={handleManualRecord} size="lg">
-            Record
-          </Button>
-        )}
-        {showTranslate && (
-          <Button onClick={handleManualTranslate} size="lg">
-            Translate
-          </Button>
-        )}
-      </div>
-      <div className="mb-6 text-lg text-gray-700">
-        Word Count: <span className="font-semibold">{wordCount}</span>
-      </div>
-      {error && (
-        <Alert variant="destructive" className="mt-4 w-full max-w-md">
-          <AlertCircle className="h-4 w-4" />
-          <AlertTitle>Error</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
-      {status && (
-        <div className="mb-4 text-blue-700 font-semibold text-lg">
-          {status}
-          {silenceCountdown !== null && <span> {silenceCountdown}</span>}
-        </div>
+          {/* Start Session Button - only at first */}
+          {showStartSession && (
+            <div className="mb-4">
+              <Button type="button" onClick={handleStartSession} size="lg">
+                Start Session
+              </Button>
+            </div>
+          )}
+          {/* Main UI - hidden until session starts */}
+          {showMainUI && (
+            <>
+              <TranslationDisplay translation={translation} audioUrl={audioUrl} />
+              <div className="mb-4 w-full max-w-md">
+                <Input
+                  type="text"
+                  placeholder="Enter target word(s)"
+                  value={targetWord}
+                  onChange={(e) => setTargetWord(e.target.value)}
+                  className="mb-2"
+                />
+              </div>
+              <ControlButtons
+                showRecord={showRecord}
+                showTranslate={showTranslate}
+                onRecord={handleManualRecord}
+                onTranslate={handleManualTranslate}
+              />
+              {error && (
+                <Alert variant="destructive" className="mt-4 w-full max-w-md">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertTitle>Error</AlertTitle>
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              )}
+              {status && (
+                <div className="mb-4 text-blue-700 font-semibold text-lg">
+                  {status}
+                  {silenceCountdown !== null && <span> {silenceCountdown}</span>}
+                </div>
+              )}
+            </>
+          )}
+        </>
       )}
     </div>
   );
 };
+
+// SessionDialog component
+const SessionDialog = ({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: () => void }) => (
+  <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-40 z-50">
+    <div className="bg-white rounded-lg shadow-lg p-6 max-w-sm w-full">
+      <h2 className="text-lg font-semibold mb-4">End Session?</h2>
+      <p className="mb-6">Are you sure you want to end the session? This will release the microphone and clear all data.</p>
+      <div className="flex justify-end gap-2">
+        <Button onClick={onCancel} variant="outline">Cancel</Button>
+        <Button onClick={onConfirm} variant="destructive">End Session</Button>
+      </div>
+    </div>
+  </div>
+);
+
+// TranslationDisplay component
+const TranslationDisplay = ({ translation, audioUrl }: { translation: string; audioUrl: string | null }) => (
+  <div>
+    <h3>Translation</h3>
+    <Textarea value={translation} readOnly />
+    {audioUrl && (
+      <div>
+        <h3>Translation Audio</h3>
+        <audio controls src={audioUrl}></audio>
+      </div>
+    )}
+  </div>
+);
 
 export default RealTimeTranslatorApp;
