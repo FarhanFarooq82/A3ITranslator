@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import RecordRTC, { StereoAudioRecorder } from 'recordrtc';
 import { Button } from './ui/button';
-import { Textarea } from './ui/textarea';
 import { Input } from './ui/input';
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert"
 import { AlertCircle } from "lucide-react"
 import LanguageSelector from './LanguageSelector';
 import ControlButtons from './ControlButtons';
+import ConversationHistory from './ConversationHistory';
 
 const languages = [
     { value: "en-US", name: "English (US)" },
@@ -49,15 +49,14 @@ const RealTimeTranslatorApp = () => {
   const [otherLanguage, setOtherLanguage] = useState(languages[1].value);
   const [status, setStatus] = useState('');
   const [silenceCountdown, setSilenceCountdown] = useState<number | null>(null);
-  const [transcription, setTranscription] = useState('');
-  const [completeTranscription, setCompleteTranscription] = useState('');
   // UI state: show session start controls only at first
   const [sessionStarted, setSessionStarted] = useState(false);
   // Session ID state
   const [sessionId, setSessionId] = useState<string | null>(null);
   // Confirmation dialog state
   const [showEndSessionConfirm, setShowEndSessionConfirm] = useState(false);
-
+  const [conversation, setConversation] = useState<{ text: string; language: string; speaker: string; timestamp: string }[]>([]);
+  const conversationEndRef = useRef<HTMLDivElement>(null);
 
   // Refs
   const recognitionRef = useRef<SpeechRecognition | null>(null);
@@ -129,7 +128,15 @@ const RealTimeTranslatorApp = () => {
     setupRecognition();
   };
 
-  // Setup recognition for trigger word
+  const languageName = (lang: string) => {
+    const found = languages.find(l => l.value === lang);
+    return found ? found.name.split(' ')[0] : lang;
+  };
+
+  useEffect(() => {
+    conversationEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [conversation]);
+
   const setupRecognition = () => {
     if ('webkitSpeechRecognition' in window) {
       recognitionRef.current = new webkitSpeechRecognition();
@@ -154,6 +161,7 @@ const RealTimeTranslatorApp = () => {
           setIsListening(false);
           startRecording();
         }
+        // Do NOT append local transcript to conversation here; only use backend response
       };
       recognitionRef.current.onerror = (event: SpeechRecognitionErrorEvent) => {
         if (event.error === 'no-speech') {
@@ -292,12 +300,35 @@ const startRecording = async () => {
   // Handle backend response
   const handleApiResponse = (response: any) => {
     setTranslation(response.translation || '');
+     // If spoken language is main language, append transcription only
+    if (response.audio_language === mainLanguage && response.transcription) {
+      setConversation(prev => [
+        ...prev,
+        {
+          text: response.transcription,
+          language: response.audio_language,
+          speaker: languageName(response.audio_language) + ' Speaker',
+          timestamp: response.timestamp || ''
+        }
+      ]);
+    }
+    // If translation language is main language, append translation only
+    else if (response.translation_language === mainLanguage && response.translation) {
+      setConversation(prev => [
+        ...prev,
+        {
+          text: response.translation,
+          language: response.audio_language,
+          speaker: languageName(response.audio_language) + ' Speaker',
+          timestamp: response.timestamp || ''
+        }
+      ]);
+    }
     if (response.translation_audio && response.translation_audio_mime_type) {
       const audioBlob = b64toBlob(response.translation_audio, response.translation_audio_mime_type);
-      playAudio(audioBlob,response.translation);
+      playAudio(audioBlob, response.translation);
     } else {
       setAudioUrl(null);
-      console.log('sessionStarted hapir', sessionStarted);
       if (sessionStarted) {
         startListening();
       }
@@ -420,6 +451,7 @@ const startRecording = async () => {
     setAudioUrl(null);
     setStatus('');
     setSilenceCountdown(null);
+    setConversation([]); // Clear conversation on end session
     // Stop and release all refs
     if (recognitionRef.current) {
       recognitionRef.current.stop();
@@ -507,6 +539,14 @@ const startRecording = async () => {
       <h1 className="text-3xl font-bold mb-6 text-gray-800">A3I Translator</h1>
       {/* Add a global log for every render */}
       <div style={{position:'fixed',top:0,right:0,background:'#fff',zIndex:9999,fontSize:'10px',padding:'2px'}}>Check console for logs</div>
+      {/* Conversation History */}
+      {showMainUI && (
+        <ConversationHistory
+          conversation={conversation}
+          mainLanguage={mainLanguage}
+          conversationEndRef={conversationEndRef}
+        />
+      )}
       {/* End Session Confirmation Dialog - overlays everything else when visible */}
       {showEndSessionConfirm ? (
         <SessionDialog onCancel={cancelEndSession} onConfirm={confirmEndSession} />
@@ -523,13 +563,13 @@ const startRecording = async () => {
           {/* Language Selection - always visible */}
           <div className="flex flex-col md:flex-row gap-4 mb-6">
             <LanguageSelector
-              label="Main Language (Speech Recognition):"
+              label="Main Language:"
               value={mainLanguage}
               onChange={setMainLanguage}
               options={languages.map(l => ({ value: l.value, label: l.name }))}
             />
             <LanguageSelector
-              label="Other Language (Translation Target):"
+              label="Target Language  :"
               value={otherLanguage}
               onChange={setOtherLanguage}
               options={languages.map(l => ({ value: l.value, label: l.name }))}
@@ -546,7 +586,6 @@ const startRecording = async () => {
           {/* Main UI - hidden until session starts */}
           {showMainUI && (
             <>
-              <TranslationDisplay translation={translation} audioUrl={audioUrl} />
               <div className="mb-4 w-full max-w-md">
                 <Input
                   type="text"
@@ -562,6 +601,7 @@ const startRecording = async () => {
                 onRecord={handleManualRecord}
                 onTranslate={handleManualTranslate}
               />
+              <TranslationDisplay audioUrl={audioUrl} />
               {error && (
                 <Alert variant="destructive" className="mt-4 w-full max-w-md">
                   <AlertCircle className="h-4 w-4" />
@@ -598,10 +638,8 @@ const SessionDialog = ({ onCancel, onConfirm }: { onCancel: () => void; onConfir
 );
 
 // TranslationDisplay component
-const TranslationDisplay = ({ translation, audioUrl }: { translation: string; audioUrl: string | null }) => (
+const TranslationDisplay = ({ audioUrl }: { audioUrl: string | null }) => (
   <div>
-    <h3>Translation</h3>
-    <Textarea value={translation} readOnly />
     {audioUrl && (
       <div>
         <h3>Translation Audio</h3>

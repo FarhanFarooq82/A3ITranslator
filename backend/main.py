@@ -39,10 +39,10 @@ common_safety_settings = [
 SYSTEM_PROMPT = """Task: Process audio input.
 Languages: 1 Main Language and 1 other language is provided by the user.
 Steps:
-1. Identify audio language (must be one of the both provided by user).
+1. Identify audio language (must be one of the 2, provided by user).
 2. Transcribe audio in that language. Include foreign words in transcription.
-3. Contextually translate transcription into the non spoken language from the list (user provided) with simple vocabulary. Translate with respect to gender of the speaker.
-4. If any other language is spoken consider the main Language as a translation language
+3. Contextually translate into other than the detected language from the list (user provided) with simple vocabulary. Translate with pronouns according to the gender of the speaker.
+4. If any other language is spoken consider the main Language as a translation_language
 Output JSON format:
 {
     "timestamp": "current_time",
