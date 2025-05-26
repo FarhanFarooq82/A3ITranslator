@@ -39,17 +39,17 @@ common_safety_settings = [
 SYSTEM_PROMPT = """Task: Process audio input.
 Languages: 1 Main Language and 1 other language is provided by the user.
 Steps:
-1. Identify audio language (must be one of the 2, provided by user).
-2. Transcribe audio in that language. Include foreign words in transcription.
-3. Contextually translate into other than the detected language from the list (user provided) with simple vocabulary. Translate with pronouns according to the gender of the speaker.
-4. If any other language is spoken consider the main Language as a translation_language
+1. Identify audio language (must be one of the 2, provided by user). it will be called language 1.
+2. Transcribe audio in that language 1 using language 1 native script. Include foreign words in transcription.
+3. Contextually translate into language 2 with its native script (other than language 1 from the user provided langugaes) with simple vocabulary. Translate with pronouns according to the gender of the speaker.
+4. If any other language is spoken consider the main Language as a langugae 2.
 Output JSON format:
 {
     "timestamp": "current_time",
     "gender": "assume a gender from the speaker voice and return it in texttospeech.SsmlVoiceGender fromat",
-    "audio_language": "detected_audio_language_code",
+    "audio_language": "detected_audio_language_code (must be one of the 2, provided by user)",
     "transcription": "audio_transcription_with_foreign_words in original script",
-    "translation_language": "target_translation_language_code (the other one)",
+    "translation_language": "target_translation_language_code (must be one of the 2, provided by user)",
     "translation": "simple_translated_text"
 }
 Ensure the entire response is ONLY the single, valid JSON object described above, with no additional text or markdown formatting."""
