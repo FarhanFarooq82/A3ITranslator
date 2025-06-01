@@ -4,13 +4,50 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
-
         {
             "type": "chrome",
             "request": "launch",
             "name": "Launch Chrome against localhost",
             "url": "http://localhost:5173",
             "webRoot": "${workspaceFolder}"
+        },
+        {
+            "name": "Python: FastAPI Debug",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "main:app", 
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8000"
+            ],
+            "jinja": true,
+            "justMyCode": false,
+            "cwd": "${workspaceFolder}/backend",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/backend"
+            },
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Python: FastAPI Hot Reload",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "main:app",
+                "--reload",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8000"
+            ],
+            "jinja": true,
+            "justMyCode": true,
+            "cwd": "${workspaceFolder}/backend",
+            "console": "integratedTerminal"
         }
     ]
 }
