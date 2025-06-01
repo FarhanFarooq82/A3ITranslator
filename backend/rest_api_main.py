@@ -1,18 +1,19 @@
 import json
 import logging
 import base64  # Import base64 for encoding
+import os
 from datetime import datetime
+import requests
 from fastapi import FastAPI, Form, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from google import genai
-from google.genai import types
-from google.genai.types import HarmCategory, HarmBlockThreshold, GenerateContentConfig
 from google.cloud import texttospeech_v1beta1 as texttospeech  # Use v1beta1 for potentially more features
 from google.api_core.exceptions import GoogleAPIError
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# No retry configuration as we're handling quota limits through fallback models
 
 app = FastAPI()
 
@@ -25,13 +26,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Common safety settings for Gemini
+# Get API key from environment variable
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
+if not GOOGLE_API_KEY:
+    logger.warning("GOOGLE_API_KEY environment variable not set")
+
+# Common safety settings for Gemini (using direct API values)
 common_safety_settings = [
-    {"category": HarmCategory.HARM_CATEGORY_HARASSMENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
-    {"category": HarmCategory.HARM_CATEGORY_HATE_SPEECH, "threshold": HarmBlockThreshold.BLOCK_NONE},
-    {"category": HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, "threshold": HarmBlockThreshold.BLOCK_NONE},
-    {"category": HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
+    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
 ]
+
+# Base URL for Gemini API
+GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com/v1"
 
 # Your System Prompt for Gemini
 SYSTEM_PROMPT = """Task: Process audio input.
@@ -55,34 +64,54 @@ Output JSON format:
 }
 Ensure the entire response is ONLY the single, valid JSON object described above, with no additional text or markdown formatting."""
 
-# # Initialize Google Gemini model with the system instruction
-# gemini_model = genai.Client(
-#     gemini_model="gemini-1.5-flash-latest",  # Or your preferred model
-#     system_instruction=SYSTEM_PROMPT,
-#     safety_settings=common_safety_settings
-# )
-
-# Initialize Gemini TTS model for premium users
-gemini_tts_model = genai.Client(api_key='AIzaSyBnjnHSEhVm6QY7tgfBd7sgGBFQqbuKOnc')
-
-# Initialize Google Cloud Text-to-Speech client
-try:
-    tts_client = texttospeech.TextToSpeechClient()
-    logger.info("Google Cloud Text-to-Speech client initialized.")
-except Exception as e:
-    logger.error(f"Failed to initialize Google Cloud Text-to-Speech client: {e}", exc_info=True)
-    # Depending on your needs, you might want to raise an exception or handle this gracefully
-
-USER_PROMPT_LANGUAGES_TEMPLATE = "User language preferences: {}"
+def call_gemini_api(model_name, contents, generation_config=None, system_instruction=None):
+    """Generic function to call the Gemini API directly using requests."""
+    
+    url = f"{GEMINI_API_BASE_URL}/models/{model_name}:generateContent?key={GOOGLE_API_KEY}"
+    
+    request_body = {
+        "contents": contents
+    }
+    
+    if generation_config:
+        request_body["generationConfig"] = generation_config
+    
+    # For Gemini 2.0 models, we need to incorporate system instructions into the user prompt
+    # instead of using the systemInstruction parameter
+    if system_instruction and not model_name.startswith("gemini-2"):
+        request_body["systemInstruction"] = {
+            "text": system_instruction
+        }
+    
+    if common_safety_settings:
+        request_body["safetySettings"] = common_safety_settings
+    
+    logger.info(f"Calling Gemini API model: {model_name}")
+    
+    response = requests.post(url, json=request_body)
+    
+    # Handle quota exceeded errors by trying Gemini 1.5 Flash as fallback
+    if response.status_code == 429 and model_name == "gemini-2.0-flash":
+        logger.warning(f"Quota exceeded for {model_name}, falling back to gemini-1.5-flash-latest")
+        # Update URL for the fallback model
+        fallback_url = f"{GEMINI_API_BASE_URL}/models/gemini-1.5-flash-latest:generateContent?key={GOOGLE_API_KEY}"
+        
+        # Make the fallback request
+        response = requests.post(fallback_url, json=request_body)
+    
+    if response.status_code != 200:
+        logger.error(f"Gemini API error: {response.status_code} - {response.text}")
+        raise HTTPException(
+            status_code=response.status_code, 
+            detail=f"Gemini API error: {response.text}"
+        )
+    
+    return response.json()
 
 # --- TTS Configuration ---
 # Define the voice and audio format for the translation audio
-# You should dynamically determine the language_code based on the translation_language
-# returned by Gemini. For this example, we'll use a default based on your prompt languages.
-# Refer to Google Cloud Text-to-Speech documentation for available voices:
-# https://cloud.google.com/text-to-speech/docs/voices
-DEFAULT_TTS_LANGUAGE_CODE = 'da-DK'  # Assuming Urdu is a target language from your prompt
-DEFAULT_TTS_VOICE_GENDER = texttospeech.SsmlVoiceGender.SSML_VOICE_GENDER_UNSPECIFIED  # Or MALE, FEMALE
+DEFAULT_TTS_LANGUAGE_CODE = 'da-DK'  
+DEFAULT_TTS_VOICE_GENDER = texttospeech.SsmlVoiceGender.SSML_VOICE_GENDER_UNSPECIFIED  
 DEFAULT_AUDIO_ENCODING = texttospeech.AudioEncoding.MP3
 DEFAULT_AUDIO_MIME_TYPE = "audio/mp3"
 
@@ -90,60 +119,69 @@ def synthesize_text_to_audio_gemini(text: str, language_code: str, gender: textt
     """Converts text to speech using Gemini's TTS API for premium users."""
     try:
         logger.info(f"Using premium Gemini TTS for language: {language_code} with tone: {tone}")
-          # Add tone instruction to the text for Gemini TTS
-        text = f"Read aloud with {tone} tone in {language_code}: {text}"
+        
+        # Add tone instruction to the text for Gemini TTS
+        text = f"Read aloud with {tone} tone in {language_code} text: {text}"
         
         # Map voice name based on gender - using predefined voice names
-        voice_name = "lapetus" # Default voice
+        voice_name = "Tenor" # Default voice
         if gender == texttospeech.SsmlVoiceGender.MALE:
-            voice_name = "lapetus"  # Male voice
+            voice_name = "Tenor"  # Male voice
         elif gender == texttospeech.SsmlVoiceGender.FEMALE:
-            voice_name = "Erinome"   # Female voice
+            voice_name = "Nova"   # Female voice
         elif gender == texttospeech.SsmlVoiceGender.NEUTRAL:
             voice_name = "Charon" # More neutral voice
-              # Call the Gemini TTS model using standard dictionary-based configuration
-        # We're not importing GenerateContentConfig because it's not available in your version
-        
-        generate_config =types.GenerateContentConfig(
-            temperature=1, 
-            response_modalities=["AUDIO"],
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name=voice_name,
-                    )
-                )
-            ),
-        )
-        
+            
+        # Call the Gemini TTS model using standard dictionary-based configuration
         contents = [
-            types.Content(
-                role="user",            
-                parts=[
-                    types.Part.from_text(text = text),
-                ],
-            ),
-        ]        # Call the Gemini TTS model with proper configuration
-        tts_response = gemini_tts_model.models.generate_content(
-            model="gemini-2.5-pro-preview-tts",  # Use the latest TTS model
-            contents=contents,
-            config=generate_config
-        )
+            {
+                "role": "user",
+                "parts": [
+                    {"text": text}
+                ]
+            }
+        ]
         
-        # Extract the audio content from the response
-        audio_data = tts_response.candidates[0].content.parts[0].inline_data.data
+        generation_config = {
+            "temperature": 0.2,
+            "responseModalities": ["audio"],
+            "speechConfig": {
+                "voiceConfig": {
+                    "prebuiltVoiceConfig": {
+                        "voiceName": voice_name
+                    }
+                }
+            }
+        }
         
-        logger.info(f"Successfully synthesized premium speech using Gemini TTS with voice: {voice_name}")
-        return audio_data
+        # Call the Gemini TTS API directly
+        tts_model_name = "gemini-2.5-pro-preview-tts"
+        response_json = call_gemini_api(tts_model_name, contents, generation_config)
+        
+        # Extract audio data from the response
+        if 'candidates' in response_json and response_json['candidates']:
+            candidate = response_json['candidates'][0]
+            if 'content' in candidate and 'parts' in candidate['content']:
+                for part in candidate['content']['parts']:
+                    if 'inlineData' in part:
+                        audio_data = base64.b64decode(part['inlineData']['data'])
+                        logger.info(f"Successfully synthesized premium speech using Gemini TTS with voice: {voice_name}")
+                        return audio_data
+        
+        raise Exception("Could not extract audio content from Gemini TTS API response")
         
     except Exception as e:
         logger.error(f"Gemini TTS API error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Text-to-Speech synthesis failed: {e}")
+        # Fall back to regular TTS if Gemini TTS fails
+        logger.warning("Falling back to standard TTS due to Gemini TTS error")
+        return synthesize_text_to_audio(text, language_code, gender)
 
-def synthesize_text_to_audio(text: str, language_code: str, gender: texttospeech.SsmlVoiceGender) -> bytes:
-    """Converts text to speech using Google Cloud Text-to-Speech.
-    Uses higher quality settings for premium users."""
+def synthesize_text_to_audio(text: str, language_code: str, gender: texttospeech.SsmlVoiceGender, is_premium: bool = False) -> bytes:
+    """Converts text to speech using Google Cloud Text-to-Speech."""
     try:
+        # Initialize Google Cloud Text-to-Speech client
+        tts_client = texttospeech.TextToSpeechClient()
+        
         synthesis_input = texttospeech.SynthesisInput(text=text)
 
         voice = texttospeech.VoiceSelectionParams(
@@ -154,9 +192,9 @@ def synthesize_text_to_audio(text: str, language_code: str, gender: texttospeech
         # Use higher quality audio settings for premium users
         audio_config = texttospeech.AudioConfig(
             audio_encoding=DEFAULT_AUDIO_ENCODING,
-            speaking_rate=0.9,
-            pitch=0.0,
-            sample_rate_hertz=24000 
+            speaking_rate=0.9 if is_premium else 1.0,  # Slightly slower for premium users (clearer speech)
+            pitch=0.0 if is_premium else 0.0,          # Could adjust pitch for premium users if desired
+            sample_rate_hertz=24000 if is_premium else 16000  # Higher sample rate for premium users
         )
 
         response = tts_client.synthesize_speech(
@@ -199,92 +237,79 @@ async def process_audio(
           # User-specific part of the prompt for this request (language pair and premium status)
         current_user_languages = f"Main Language {main_language}, {other_language}"
         premium_text = "Premium user" if is_premium_bool else "Standard user"
+        user_prompt_text = f"User language preferences: {current_user_languages}. {premium_text}"
         
-        # Create content with only user role and include system instructions in the user message
-        # For Gemini 2.0 Flash, we can't use "system" role directly
-        enhanced_user_message = f"""System Instructions:
-{SYSTEM_PROMPT}
-
-User request: {current_user_languages}"""
-
+        # For Gemini 2.0 Flash, combine system prompt with user prompt as it doesn't support system role
+        combined_prompt = f"{SYSTEM_PROMPT}\n\n{user_prompt_text}"
+        
+        # Prepare content for Gemini API with only user role
         contents = [
-            types.Content(
-                role="user",
-                parts=[
-                    types.Part(text=enhanced_user_message),
-                    types.Part(
-                        inline_data=types.Blob(
-                            mime_type=content_type,
-                            data=audio_content
-                        )
-                    )
+            {
+                "role": "user",
+                "parts": [
+                    {"text": combined_prompt},
+                    {
+                        "inlineData": {
+                            "mimeType": content_type,
+                            "data": base64.b64encode(audio_content).decode('utf-8')
+                        }
+                    }
                 ]
-            )
+            }
         ]
         
-        # First try with Gemini 2.0 Flash model
-        try:
-            response = gemini_tts_model.models.generate_content(
-                model="gemini-2.0-flash",  # Using Gemini 2.0 Flash model
-                contents=contents,
-                config=GenerateContentConfig(
-                    temperature=0.3 if is_premium_bool else 0.4,
-                    top_p=0.9 if is_premium_bool else 0.8,
-                    top_k=50 if is_premium_bool else 40,
-                    max_output_tokens=4096 if is_premium_bool else 2048,
-                    response_mime_type="application/json"
-                )
-            )
-        except Exception as e:
-            # If we encounter an error (like quota exceeded), fall back to Gemini 1.5 Flash
-            if "429" in str(e) or "quota" in str(e).lower():
-                logger.warning(f"Quota exceeded for Gemini 2.0 Flash, falling back to Gemini 1.5 Flash: {e}")
-                response = gemini_tts_model.models.generate_content(
-                    model="gemini-1.5-flash-latest",  # Fallback to Gemini 1.5 Flash model
-                    contents=contents,
-                    config=GenerateContentConfig(
-                        temperature=0.3 if is_premium_bool else 0.4,
-                        top_p=0.9 if is_premium_bool else 0.8,
-                        top_k=50 if is_premium_bool else 40,
-                        max_output_tokens=4096 if is_premium_bool else 2048,
-                        response_mime_type="application/json"
-                    )
-                )
-            else:
-                # For other errors, re-raise
-                raise e
-
-        logger.info(f"Gemini API response received.")
-        if response.prompt_feedback:
-             logger.info(f"Finish reason: {response.prompt_feedback.finish_reason}. Safety ratings: {response.prompt_feedback.safety_ratings}")
-
+        # Gemini generation configuration - adjust based on premium status
+        generation_config = {
+            "temperature": 0.3 if is_premium_bool else 0.4,  # Lower temperature for premium users
+            "topP": 0.9 if is_premium_bool else 0.8,        # Higher top_p for premium users
+            "topK": 50 if is_premium_bool else 40,          # Higher top_k for premium users
+            "maxOutputTokens": 4096 if is_premium_bool else 2048,  # More tokens for premium users
+            "responseMimeType": "application/json", # Requesting JSON output
+        }
+          # Call the Gemini model for transcription and translation
+        model_name = "gemini-2.0-flash" # Using Gemini 2.0 Flash model
+        response_json = call_gemini_api(
+            model_name=model_name,
+            contents=contents,
+            generation_config=generation_config,
+            system_instruction=None  # Explicitly set to None since we've included it in the combined_prompt
+        )
+        
+        logger.info("Gemini API response received.")
+        
         # --- Handle Gemini Response ---
-        if response.prompt_feedback and response.prompt_feedback.block_reason:
-            logger.error(f"Response blocked due to: {response.prompt_feedback.block_reason}")
-            logger.error(f"Safety ratings: {response.prompt_feedback.safety_ratings}")
-            raise HTTPException(
-                status_code=400,
-                detail=f"Content blocked by safety filters: {response.prompt_feedback.block_reason}. Ratings: {response.prompt_feedback.safety_ratings}"
-            )
-
-        if not response.candidates or not response.candidates[0].content.parts:
-            logger.error(f"No content returned from Gemini. Full response: {response}")
-            if response.prompt_feedback:
-                logger.error(f"Prompt Feedback: {response.prompt_feedback}")
+        if 'promptFeedback' in response_json:
+            prompt_feedback = response_json['promptFeedback']
+            if 'blockReason' in prompt_feedback:
+                logger.error(f"Response blocked due to: {prompt_feedback['blockReason']}")
+                if 'safetyRatings' in prompt_feedback:
+                    logger.error(f"Safety ratings: {prompt_feedback['safetyRatings']}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Content blocked by safety filters: {prompt_feedback['blockReason']}"
+                )
+            
+            if 'safetyRatings' in prompt_feedback:
+                logger.info(f"Safety ratings: {prompt_feedback['safetyRatings']}")
+        
+        # Check for candidates in response
+        if not response_json.get('candidates') or not response_json['candidates'][0].get('content', {}).get('parts'):
+            logger.error(f"No content returned from Gemini. Full response: {response_json}")
             raise HTTPException(status_code=500, detail="No content returned from Gemini model.")
 
-        response_text = response.candidates[0].content.parts[0].text
+        # Extract response text
+        response_text = response_json['candidates'][0]['content']['parts'][0]['text']
 
         # --- Parse Gemini JSON Response ---
         try:
-            response_json = json.loads(response_text)
+            parsed_response = json.loads(response_text)
             # Add timestamp here as per your JSON format
-            response_json["timestamp"] = datetime.utcnow().isoformat()
+            parsed_response["timestamp"] = datetime.utcnow().isoformat()
 
         except json.JSONDecodeError:
             logger.warning(f"Gemini response text is not valid JSON: '{response_text}'")
             # Create a partial JSON response with the raw text and an error indicator
-            response_json = {
+            parsed_response = {
                 "timestamp": datetime.utcnow().isoformat(),
                 "transcription": response_text, # Store the raw text here
                 "audio_language": "unknown",
@@ -296,13 +321,13 @@ User request: {current_user_languages}"""
             # If JSON parsing failed, we cannot reliably get the translation for TTS,
             # so we proceed without generating audio for the translation.
             logger.error("JSON decoding failed, skipping Text-to-Speech synthesis.")
-            return response_json # Return the error JSON immediately
+            return parsed_response # Return the error JSON immediately
 
         # --- Perform Text-to-Speech for Translation ---
-        translation_text = response_json.get("translation")
-        tone = response_json.get("tone", "neutral")
-        Translation_with_gestures = response_json.get("Translation_with_gestures")
-        translation_language_code = response_json.get("translation_language", DEFAULT_TTS_LANGUAGE_CODE) # Use detected language or default
+        translation_text = parsed_response.get("translation")
+        tone = parsed_response.get("tone", "neutral")
+        Translation_with_gestures = parsed_response.get("Translation_with_gestures")
+        translation_language_code = parsed_response.get("translation_language", DEFAULT_TTS_LANGUAGE_CODE) # Use detected language or default
 
         # Map Gemini's gender string to Google TTS enum
         def get_tts_gender(gender_str):
@@ -315,12 +340,12 @@ User request: {current_user_languages}"""
             return gender_map.get(str(gender_str).upper(), texttospeech.SsmlVoiceGender.SSML_VOICE_GENDER_UNSPECIFIED)
             
         # Extract gender from response, fallback to unspecified
-        tts_gender = get_tts_gender(response_json.get("gender"))
+        tts_gender = get_tts_gender(parsed_response.get("gender"))
         
         translation_audio_base64 = None
         # Log premium status for debugging
         logger.info(f"Processing TTS request, premium status: {is_premium_bool}")
-
+        
         if translation_text and translation_language_code != "unknown":
             try:
                 # Choose TTS method based on premium status
@@ -346,7 +371,8 @@ User request: {current_user_languages}"""
                         audio_content_bytes = synthesize_text_to_audio(
                             text=translation_text,
                             language_code=translation_language_code,
-                            gender=tts_gender
+                            gender=tts_gender,
+                            is_premium=True
                         )
                 else:
                     # Use standard TTS for non-premium users
@@ -354,7 +380,8 @@ User request: {current_user_languages}"""
                     audio_content_bytes = synthesize_text_to_audio(
                         text=translation_text,
                         language_code=translation_language_code,
-                        gender=tts_gender
+                        gender=tts_gender,
+                        is_premium=False
                     )
                 # Encode the audio content to Base64
                 translation_audio_base64 = base64.b64encode(audio_content_bytes).decode('utf-8')
@@ -365,19 +392,19 @@ User request: {current_user_languages}"""
                 raise http_exc
             except Exception as e:
                 logger.error(f"Error during Text-to-Speech synthesis or encoding: {e}", exc_info=True)
-                response_json["tts_error"] = f"Failed to generate translation audio: {str(e)}"
+                parsed_response["tts_error"] = f"Failed to generate translation audio: {str(e)}"
 
         # --- Add Audio Data to JSON Response ---
         if translation_audio_base64:
-            response_json["translation_audio"] = translation_audio_base64
-            response_json["translation_audio_mime_type"] = DEFAULT_AUDIO_MIME_TYPE
+            parsed_response["translation_audio"] = translation_audio_base64
+            parsed_response["translation_audio_mime_type"] = DEFAULT_AUDIO_MIME_TYPE
             logger.info("Added translation audio to response.")
         else:
             logger.warning("Translation audio not generated (either no translation text, unknown language, or TTS failed).")
-            response_json["translation_audio"] = None # Explicitly set to None if not generated
+            parsed_response["translation_audio"] = None # Explicitly set to None if not generated
 
         logger.info("Successfully processed audio file and prepared response.")
-        return response_json # Return the final JSON response
+        return parsed_response # Return the final JSON response
 
     except HTTPException as http_exc:
         # Catch and re-raise HTTPExceptions
@@ -386,3 +413,5 @@ User request: {current_user_languages}"""
         # Catch any other unexpected errors
         logger.error(f"An unexpected error occurred in the main processing path: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"An internal server error occurred: {str(e)}")
+
+# No retry function as we're handling quota limits directly with model fallbacks

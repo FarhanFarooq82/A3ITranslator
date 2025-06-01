@@ -12,6 +12,7 @@ export const TranslationProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [targetWord, setTargetWord] = useState<string>('Translate');
   const [mainLanguage, setMainLanguage] = useState<string>(languages[0].value);
   const [otherLanguage, setOtherLanguage] = useState<string>(languages[1].value);
+  const [isPremium, setIsPremium] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string>('');
   const [silenceCountdown, setSilenceCountdown] = useState<number | null>(null);
@@ -25,6 +26,7 @@ export const TranslationProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [showEndSessionConfirm, setShowEndSessionConfirm] = useState<boolean>(false);
   const [lastTranslation, setLastTranslation] = useState<string>('');
   const [lastAudioUrl, setLastAudioUrl] = useState<string | null>(null);
+  const [recognitionStream, setRecognitionStream] = useState<MediaStream | null>(null);
 
   // Service refs
   const recordingManager = useRef(new AudioRecordingManager());
@@ -40,7 +42,7 @@ export const TranslationProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const startListening = useCallback(() => {
     console.log('Starting listening from context...'); // Debug log
     setStatus('Listening for trigger word...');
-    setIsListening(true);
+
     
     speechServiceRef.current.setupRecognition(
       'en-US', // Assuming 'en-US' is the main language
@@ -87,6 +89,12 @@ export const TranslationProvider: React.FC<{ children: React.ReactNode }> = ({ c
       }
     );
 
+    // Get microphone stream for visualizer
+    navigator.mediaDevices.getUserMedia({ audio: true })
+      .then(stream => setRecognitionStream(stream))
+      .catch(() => setRecognitionStream(null));
+    
+      setIsListening(true);
     speechServiceRef.current.start();
   }, [ sessionStarted, targetWord, setAudioUrl, setTranslation]);
 
@@ -95,12 +103,11 @@ export const TranslationProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     try {
       setIsProcessingStop(true);
-      const audioBlob = await recordingManager.current.stopRecording();
-
-      const response = await translationService.current.sendAudioForTranslation(
+      const audioBlob = await recordingManager.current.stopRecording();      const response = await translationService.current.sendAudioForTranslation(
         audioBlob,
         mainLanguage,
-        otherLanguage
+        otherLanguage,
+        isPremium
       );      // Update conversation with transcription
       if (response.transcription && response.audio_language === mainLanguage) {
         setConversation(prev => [
@@ -165,8 +172,9 @@ export const TranslationProvider: React.FC<{ children: React.ReactNode }> = ({ c
       setIsProcessingStop(false);
       setIsRecording(false);
       recordingManager.current.cleanup();
+      setRecognitionStream(null); // Hide visualizer when recording
     }
-  }, [isProcessingStop, mainLanguage, otherLanguage, sessionStarted]);
+  }, [isProcessingStop, mainLanguage, otherLanguage, sessionStarted, isPremium]);
   const triggerRecording = useCallback(async () => {
     // Clear previous audio and translation when starting a new recording
     setStatus('Recording...');
@@ -192,6 +200,12 @@ export const TranslationProvider: React.FC<{ children: React.ReactNode }> = ({ c
       setIsRecording(false);
     }
   }, []);
+  // Add swapLanguages function to swap main and target languages
+  const swapLanguages = useCallback(() => {
+    const tempLanguage = mainLanguage;
+    setMainLanguage(otherLanguage);
+    setOtherLanguage(tempLanguage);
+  }, [mainLanguage, otherLanguage]);
 
   // Update refs after function declarations
   useEffect(() => {
@@ -242,7 +256,6 @@ export const TranslationProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setOtherLanguage(languages[1].value);
     setConversation([]);
   }, []);
-
   const value: TranslationContextType = {
     sessionStarted,
     setSessionStarted,
@@ -254,6 +267,8 @@ export const TranslationProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setMainLanguage,
     otherLanguage,
     setOtherLanguage,
+    isPremium,
+    setIsPremium,
     error,
     setError,
     status,
@@ -282,6 +297,9 @@ export const TranslationProvider: React.FC<{ children: React.ReactNode }> = ({ c
     cleanup,
     lastTranslation,
     lastAudioUrl,
+    recognitionStream,
+    setRecognitionStream,
+    swapLanguages, // Add swapLanguages to context value
   };
 
   return (

@@ -18,16 +18,17 @@ export class TranslationService {
   constructor(apiUrl: string = 'http://localhost:8000/process-audio') {
     this.backendApiUrl = apiUrl;
   }
-
   async sendAudioForTranslation(
     audioBlob: Blob,
     mainLanguage: string,
-    otherLanguage: string
+    otherLanguage: string,
+    isPremium: boolean = false
   ): Promise<TranslationResponse> {
     const formData = new FormData();
     formData.append('file', audioBlob, 'audio.ogg');
     formData.append('main_language', mainLanguage);
     formData.append('other_language', otherLanguage);
+    formData.append('is_premium', isPremium.toString());
 
     const response = await fetch(this.backendApiUrl, {
       method: 'POST',

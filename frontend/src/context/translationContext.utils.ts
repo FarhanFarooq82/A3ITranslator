@@ -8,6 +8,8 @@ export interface TranslationContextType {
   setMainLanguage: (value: string) => void;
   otherLanguage: string;
   setOtherLanguage: (value: string) => void;
+  isPremium: boolean;
+  setIsPremium: (value: boolean) => void;
   error: string | null;
   setError: (value: string | null) => void;
   status: string;
@@ -39,6 +41,9 @@ export interface TranslationContextType {
   cleanup: () => void;
   lastTranslation: string;
   lastAudioUrl: string | null;
+  recognitionStream: MediaStream | null;
+  setRecognitionStream: (stream: MediaStream | null) => void;
+  swapLanguages: () => void; // Added swapLanguages function
 }
 
 export const TranslationContext = createContext<TranslationContextType | undefined>(undefined);
