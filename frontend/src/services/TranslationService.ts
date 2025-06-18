@@ -12,8 +12,6 @@ interface TranslationResponse {
 
 export class TranslationService {
   private backendApiUrl: string;
-  private onPlaybackComplete?: () => void;
-  private currentAudio: HTMLAudioElement | null = null;
 
   constructor(apiUrl: string = 'http://localhost:8000/process-audio') {
     this.backendApiUrl = apiUrl;
@@ -40,45 +38,8 @@ export class TranslationService {
     }
 
     return await response.json();
-  }
-
-  playTranslation(audioBlob: Blob, onComplete?: () => void): string {
-    this.onPlaybackComplete = onComplete;
-    const url = this.createAudioUrl(audioBlob);
-
-    if (this.currentAudio) {
-      this.currentAudio.pause();
-      this.revokeAudioUrl(url);
-    }
-
-    this.currentAudio = new Audio(url);
-    this.currentAudio.onended = () => {
-      this.revokeAudioUrl(url);
-      this.onPlaybackComplete?.();
-      this.currentAudio = null;
-    };
-
-    this.currentAudio.play();
-    return url;
-  }
-
-  stop(): void {
-    if (this.currentAudio) {
-      this.currentAudio.pause();
-      this.currentAudio = null;
-    }
-  }
-
-  b64toBlob(b64Data: string, contentType: string): Blob {
+  }  b64toBlob(b64Data: string, contentType: string): Blob {
     return b64toBlob(b64Data, contentType);
-  }
-
-  createAudioUrl(audioBlob: Blob): string {
-    return URL.createObjectURL(audioBlob);
-  }
-
-  revokeAudioUrl(url: string): void {
-    URL.revokeObjectURL(url);
   }
 }
 

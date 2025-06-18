@@ -14,7 +14,7 @@ export const TranslationDisplay: React.FC<TranslationDisplayProps> = ({ audioUrl
           <h3 className="text-lg font-medium mb-2">Translation Audio</h3>
           <audio 
             controls 
-            src={audioUrl} 
+            src={audioUrl ?? undefined} 
             className="w-full"
           ></audio>
         </div>

@@ -1,6 +1,7 @@
 import json
 import logging
 import base64  # Import base64 for encoding
+import os  # Import os for environment variables
 from datetime import datetime
 from fastapi import FastAPI, Form, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,10 +10,27 @@ from google.genai import types
 from google.genai.types import HarmCategory, HarmBlockThreshold, GenerateContentConfig
 from google.cloud import texttospeech_v1beta1 as texttospeech  # Use v1beta1 for potentially more features
 from google.api_core.exceptions import GoogleAPIError
+import requests  # Import requests for API calls
+from dotenv import load_dotenv  # Import dotenv for loading environment variables from .env file
+from pathlib import Path
+import azure.cognitiveservices.speech as speechsdk  # For Azure TTS
+import re  # For regex pattern matching in SSML processing
+from fastapi.responses import JSONResponse
+from functools import lru_cache
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Load environment variables from .env file with absolute path
+env_path = Path(__file__).resolve().parent / '.env'
+logger.info(f"Loading .env file from: {env_path}")
+load_dotenv(dotenv_path=env_path)
+
+# Verify if env variables are loaded correctly
+logger.info(f"Environment variable GOOGLE_API_KEY exists: {'GOOGLE_API_KEY' in os.environ}")
+logger.info(f"Environment variable PLAYAI_KEY exists: {'PLAYAI_KEY' in os.environ}")
+logger.info(f"Environment variable PLAYAI_USER_ID exists: {'PLAYAI_USER_ID' in os.environ}")
 
 app = FastAPI()
 
@@ -63,7 +81,12 @@ Ensure the entire response is ONLY the single, valid JSON object described above
 # )
 
 # Initialize Gemini TTS model for premium users
-gemini_tts_model = genai.Client(api_key='AIzaSyBnjnHSEhVm6QY7tgfBd7sgGBFQqbuKOnc')
+google_api_key = os.environ.get("GOOGLE_API_KEY")
+if not google_api_key:
+    logger.warning("GOOGLE_API_KEY environment variable not set or empty in .env file")
+    google_api_key = 'AIzaSyBnjnHSEhVm6QY7tgfBd7sgGBFQqbuKOnc'  # Fallback to the hardcoded key
+    
+gemini_tts_model = genai.Client(api_key=google_api_key)
 
 # Initialize Google Cloud Text-to-Speech client
 try:
@@ -86,58 +109,187 @@ DEFAULT_TTS_VOICE_GENDER = texttospeech.SsmlVoiceGender.SSML_VOICE_GENDER_UNSPEC
 DEFAULT_AUDIO_ENCODING = texttospeech.AudioEncoding.MP3
 DEFAULT_AUDIO_MIME_TYPE = "audio/mp3"
 
+# Azure TTS API configuration
+AZURE_SPEECH_KEY = os.environ.get("AZURE_SPEECH_KEY", "")
+if not AZURE_SPEECH_KEY:
+    logger.error("AZURE_SPEECH_KEY environment variable not set or empty in .env file")
+    raise ValueError("Azure Speech API key missing - TTS functionality will not work correctly")
+else:
+    logger.info(f"AZURE_SPEECH_KEY successfully loaded from .env file: {AZURE_SPEECH_KEY[:5]}... (hidden)")
+
+AZURE_SPEECH_REGION = os.environ.get("AZURE_SPEECH_REGION", "")
+if not AZURE_SPEECH_REGION:
+    logger.warning("AZURE_SPEECH_REGION environment variable not set or empty in .env file")
+    AZURE_SPEECH_REGION = "westeurope"  # Default region
+    logger.info(f"Using default Azure region: {AZURE_SPEECH_REGION}")
+else:
+    logger.info(f"Using Azure region: {AZURE_SPEECH_REGION}")
+
+# Map language codes to Azure voice names
+# These are some high-quality Neural voices for various languages
+AZURE_VOICES = {
+    'en': {
+        'MALE': 'en-US-GuyNeural',
+        'FEMALE': 'en-US-JennyNeural',
+        'NEUTRAL': 'en-US-AriaNeural'
+    },
+    'es': {
+        'MALE': 'es-ES-AlvaroNeural',
+        'FEMALE': 'es-ES-ElviraNeural',
+        'NEUTRAL': 'es-ES-AlvaroNeural'
+    },
+    'fr': {
+        'MALE': 'fr-FR-HenriNeural',
+        'FEMALE': 'fr-FR-DeniseNeural',
+        'NEUTRAL': 'fr-FR-HenriNeural'
+    },
+    'de': {
+        'MALE': 'de-DE-ConradNeural',
+        'FEMALE': 'de-DE-KatjaNeural',
+        'NEUTRAL': 'de-DE-ConradNeural'
+    },
+    'it': {
+        'MALE': 'it-IT-DiegoNeural',
+        'FEMALE': 'it-IT-ElsaNeural',
+        'NEUTRAL': 'it-IT-DiegoNeural'
+    },
+    'da': {
+        'MALE': 'da-DK-JeppeNeural',
+        'FEMALE': 'da-DK-ChristelNeural', 
+        'NEUTRAL': 'da-DK-JeppeNeural'
+    },
+    'ar': {
+        'MALE': 'ar-EG-ShakirNeural',
+        'FEMALE': 'ar-EG-SalmaNeural',
+        'NEUTRAL': 'ar-EG-ShakirNeural'
+    },
+    'hi': {
+        'MALE': 'hi-IN-MadhurNeural',
+        'FEMALE': 'hi-IN-SwaraNeural',
+        'NEUTRAL': 'hi-IN-MadhurNeural'
+    }
+}
+
+def process_text_to_ssml(text: str, tone: str = "neutral") -> str:
+    """Convert text with non-verbal expressions to SSML format for Azure TTS."""
+    # Base SSML document with speaking style based on tone
+    style_tag = ""
+    
+    # Map tone to Azure speaking styles
+    tone_to_style = {
+        "cheerful": "cheerful",
+        "excited": "excited", 
+        "friendly": "friendly",
+        "hopeful": "hopeful",
+        "sad": "sad",
+        "angry": "angry",
+        "terrified": "terrified",
+        "unfriendly": "unfriendly",
+        "whispering": "whispering",
+        "shouting": "shouting",
+        "chat": "chat",
+        "newscast": "newscast",
+        "customerservice": "customerservice",
+        "narration": "narration-professional",
+        "empathetic": "empathetic"
+    }
+    
+    # If tone matches a known Azure style, add the style attribute
+    if tone.lower() in tone_to_style:
+        azure_style = tone_to_style[tone.lower()]
+        style_tag = f' style="{azure_style}"'
+    
+    # Start building the SSML document
+    ssml = f"""<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" 
+           xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="en-US">
+    <voice{style_tag}>"""
+    
+    # Process non-verbal expressions using regex
+    # Look for patterns like [laughter], [sigh], [cough], etc.
+    processed_text = text
+    
+    # Replace [laughter] with SSML audio effect
+    processed_text = re.sub(r'\[laughter\]', '<mstts:express-as style="laughter">', processed_text)
+    processed_text = processed_text.replace('[/laughter]', '</mstts:express-as>')
+    
+    # Handle other common expressions
+    expressions = {
+        r'\[sigh\]': '<break time="500ms"/><prosody rate="slow" pitch="-2st">*sigh*</prosody><break time="300ms"/>',
+        r'\[cough\]': '<break time="300ms"/>*cough*<break time="300ms"/>',
+        r'\[crying\]': '<prosody rate="slow" pitch="-2st">*crying*</prosody>',
+        r'\[gasp\]': '<prosody rate="fast" pitch="+3st">*gasp*</prosody>',
+        r'\[clearing throat\]': '<break time="300ms"/>*ahem*<break time="300ms"/>',
+        r'\[whisper\](.+?)\[/whisper\]': r'<prosody volume="x-soft">\1</prosody>',
+        r'\[shouting\](.+?)\[/shouting\]': r'<prosody volume="x-loud" pitch="high">\1</prosody>',
+        r'\[pause\]': '<break time="1s"/>'
+    }
+    
+    for pattern, replacement in expressions.items():
+        processed_text = re.sub(pattern, replacement, processed_text)
+    
+    # Add text to SSML document
+    ssml += processed_text
+    ssml += """</voice>
+</speak>"""
+    
+    return ssml
+
 def synthesize_text_to_audio_gemini(text: str, language_code: str, gender: texttospeech.SsmlVoiceGender, tone: str = "neutral") -> bytes:
-    """Converts text to speech using Gemini's TTS API for premium users."""
+    """Converts text to speech using Microsoft Azure's TTS API with SSML for premium users."""
     try:
-        logger.info(f"Using premium Gemini TTS for language: {language_code} with tone: {tone}")
-          # Add tone instruction to the text for Gemini TTS
-        text = f"Read aloud with {tone} tone in {language_code}: {text}"
+        logger.info(f"Using premium Azure TTS for language: {language_code} with tone: {tone}")
         
-        # Map voice name based on gender - using predefined voice names
-        voice_name = "lapetus" # Default voice
+        # Extract the base language code (e.g., 'en-US' becomes 'en')
+        base_language = language_code.split('-')[0].lower()
+        
+        # Get gender string for Azure voice selection
+        gender_str = 'NEUTRAL'
         if gender == texttospeech.SsmlVoiceGender.MALE:
-            voice_name = "lapetus"  # Male voice
+            gender_str = 'MALE'
         elif gender == texttospeech.SsmlVoiceGender.FEMALE:
-            voice_name = "Erinome"   # Female voice
-        elif gender == texttospeech.SsmlVoiceGender.NEUTRAL:
-            voice_name = "Charon" # More neutral voice
-              # Call the Gemini TTS model using standard dictionary-based configuration
-        # We're not importing GenerateContentConfig because it's not available in your version
+            gender_str = 'FEMALE'
         
-        generate_config =types.GenerateContentConfig(
-            temperature=1, 
-            response_modalities=["AUDIO"],
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name=voice_name,
-                    )
-                )
-            ),
+        # Select voice based on language and gender
+        voice_name = AZURE_VOICES.get(base_language, AZURE_VOICES['en']).get(gender_str, AZURE_VOICES[base_language]['NEUTRAL'])
+        logger.info(f"Selected Azure voice: {voice_name} for {gender_str} {language_code} speech")
+        
+        # Convert non-verbal expressions to SSML
+        ssml_text = process_text_to_ssml(text, tone)
+        
+        # Initialize Azure speech config
+        speech_config = speechsdk.SpeechConfig(subscription=AZURE_SPEECH_KEY, region=AZURE_SPEECH_REGION)
+        
+        # Set speech synthesis output format to MP3
+        speech_config.set_speech_synthesis_output_format(
+            speechsdk.SpeechSynthesisOutputFormat.Audio16Khz32KBitRateMonoMp3
         )
         
-        contents = [
-            types.Content(
-                role="user",            
-                parts=[
-                    types.Part.from_text(text = text),
-                ],
-            ),
-        ]        # Call the Gemini TTS model with proper configuration
-        tts_response = gemini_tts_model.models.generate_content(
-            model="gemini-2.5-pro-preview-tts",  # Use the latest TTS model
-            contents=contents,
-            config=generate_config
-        )
+        # Set voice name
+        speech_config.speech_synthesis_voice_name = voice_name
         
-        # Extract the audio content from the response
-        audio_data = tts_response.candidates[0].content.parts[0].inline_data.data
+        # Create speech synthesizer
+        synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=None)
         
-        logger.info(f"Successfully synthesized premium speech using Gemini TTS with voice: {voice_name}")
-        return audio_data
+        # Request synthesis
+        logger.info(f"Sending request to Azure TTS API for {voice_name}")
+        result = synthesizer.speak_ssml_async(ssml_text).get()
         
+        # Check if successfully synthesized
+        if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
+            logger.info(f"Successfully synthesized premium speech using Azure TTS with voice: {voice_name}")
+            return result.audio_data  # Returns audio as bytes
+        else:
+            if result.reason == speechsdk.ResultReason.Canceled:
+                cancellation_details = speechsdk.CancellationDetails(result)
+                logger.error(f"Azure TTS API synthesis canceled: {cancellation_details.reason}")
+                logger.error(f"Azure TTS API error details: {cancellation_details.error_details}")
+                raise Exception(f"Azure TTS API error: {cancellation_details.reason} - {cancellation_details.error_details}")
+            else:
+                logger.error(f"Azure TTS API synthesis failed: {result.reason}")
+                raise Exception(f"Azure TTS API error: {result.reason}")
+    
     except Exception as e:
-        logger.error(f"Gemini TTS API error: {e}", exc_info=True)
+        logger.error(f"Azure TTS API error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Text-to-Speech synthesis failed: {e}")
 
 def synthesize_text_to_audio(text: str, language_code: str, gender: texttospeech.SsmlVoiceGender) -> bytes:
@@ -202,10 +354,7 @@ async def process_audio(
         
         # Create content with only user role and include system instructions in the user message
         # For Gemini 2.0 Flash, we can't use "system" role directly
-        enhanced_user_message = f"""System Instructions:
-{SYSTEM_PROMPT}
-
-User request: {current_user_languages}"""
+        enhanced_user_message = f"""System Instructions:{SYSTEM_PROMPT} User request: {current_user_languages}"""
 
         contents = [
             types.Content(
@@ -319,15 +468,14 @@ User request: {current_user_languages}"""
         
         translation_audio_base64 = None
         # Log premium status for debugging
-        logger.info(f"Processing TTS request, premium status: {is_premium_bool}")
-
+        logger.info(f"Processing TTS request, premium status: {is_premium_bool}")        
         if translation_text and translation_language_code != "unknown":
             try:
                 # Choose TTS method based on premium status
                 if is_premium_bool:
                     try:
-                        # Use Gemini TTS for premium users
-                        logger.info(f"Using Gemini TTS for premium user with tone: {tone}")
+                        # Use Azure TTS for premium users
+                        logger.info(f"Using Azure TTS for premium user with tone: {tone}")
                         
                         # Use Translation_with_gestures if available, otherwise use regular translation
                         text_for_tts = Translation_with_gestures if Translation_with_gestures else translation_text
@@ -339,8 +487,8 @@ User request: {current_user_languages}"""
                             tone=tone
                         )
                     except Exception as premium_exc:
-                        # If Gemini TTS fails, log the error and fall back to standard TTS
-                        logger.error(f"Premium Gemini TTS failed: {premium_exc}. Falling back to standard TTS.", exc_info=True)
+                        # If Azure TTS fails, log the error and fall back to standard TTS
+                        logger.error(f"Premium Azure TTS failed: {premium_exc}. Falling back to standard TTS.", exc_info=True)
                         # Use standard TTS as fallback
                         logger.info("Falling back to standard TTS after premium TTS failure")
                         audio_content_bytes = synthesize_text_to_audio(
@@ -386,3 +534,31 @@ User request: {current_user_languages}"""
         # Catch any other unexpected errors
         logger.error(f"An unexpected error occurred in the main processing path: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"An internal server error occurred: {str(e)}")
+
+@lru_cache(maxsize=1)
+def get_azure_voices():
+    """Fetch and cache the list of available Azure TTS voices for the configured region."""
+    endpoint = f"https://{AZURE_SPEECH_REGION}.tts.speech.microsoft.com/cognitiveservices/voices/list"
+    headers = {"Ocp-Apim-Subscription-Key": AZURE_SPEECH_KEY}
+    response = requests.get(endpoint, headers=headers)
+    response.raise_for_status()
+    return response.json()
+
+@app.get("/available-languages/")
+def available_languages():
+    """Return a list of distinct languages (with display names) available for TTS in this Azure region."""
+    voices = get_azure_voices()
+    # Map locale to display name, e.g. 'da-DK': 'Danish (Denmark)'
+    lang_map = {}
+    for v in voices:
+        lang_code = v['Locale']
+        lang_name = v['LocaleName'] if 'LocaleName' in v else v['Locale']
+        lang_map[lang_code] = lang_name
+    # Return as a sorted list of dicts
+    return JSONResponse([{"code": code, "name": name} for code, name in sorted(lang_map.items(), key=lambda x: x[1])])
+
+@app.get("/available-voices/")
+def available_voices():
+    """Return the full list of voices for the region (for use in TTS synthesis)."""
+    voices = get_azure_voices()
+    return JSONResponse(voices)

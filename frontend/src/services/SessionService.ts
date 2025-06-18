@@ -2,6 +2,10 @@ export class SessionService {
   private readonly storageKey = 'a3i_session';
   private readonly sessionDuration = 2 * 60 * 60 * 1000; // 2 hours
 
+  getSessionDuration(): number {
+    return this.sessionDuration;
+  }
+
   generateSessionId(): string {
     return (
       Date.now().toString(36) +

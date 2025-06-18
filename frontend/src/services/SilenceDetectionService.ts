@@ -9,11 +9,10 @@ export class SilenceDetectionService {
   private silenceCountdownInterval: NodeJS.Timeout | null = null;
   private isActive = false;
   private lastCheckTime = 0;
-
   startDetection(
     analyser: AnalyserNode,
     onSilenceStart: (countdown: number) => void,
-    onSilenceEnd: () => void,
+    onSoundResumed: () => void,
     onSilenceComplete: () => void
   ): void {
     this.isActive = true;
@@ -33,13 +32,12 @@ export class SilenceDetectionService {
           this.volumeBuffer.shift();
         }
 
-        const averageVolume = this.calculateAverageVolume();
-
+        const averageVolume = this.calculateAverageVolume();        
         if (this.volumeBuffer.length === BUFFER_SIZE && averageVolume < SILENCE_THRESHOLD) {
-          this.handleSilence(onSilenceStart, onSilenceEnd, onSilenceComplete);
+          this.handleSilence(onSilenceStart, onSilenceComplete);
         } else {
           this.clearSilenceTimers();
-          onSilenceEnd();
+          onSoundResumed();
         }
 
         this.lastCheckTime = currentTime;
@@ -63,10 +61,8 @@ export class SilenceDetectionService {
   private calculateAverageVolume(): number {
     return this.volumeBuffer.reduce((a, b) => a + b, 0) / this.volumeBuffer.length;
   }
-
   private handleSilence(
     onSilenceStart: (countdown: number) => void,
-    onSilenceEnd: () => void,
     onSilenceComplete: () => void
   ): void {
     if (!this.silenceTimeout) {

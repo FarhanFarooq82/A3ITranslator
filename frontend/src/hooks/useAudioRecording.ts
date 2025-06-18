@@ -1,31 +1,44 @@
 import { useCallback, useRef } from 'react';
 import { useTranslationContext } from '../context/translationContext.utils';
 import { TranslationService } from '../services/TranslationService';
-import { SpeechRecognitionService } from '../services/SpeechRecognitionService';
+import { PlaybackManager } from '../services/PlaybackManager';
 import type { TranslationResponse } from '../services/TranslationService';
 
 export const useAudioRecording = () => {
   const {
     setStatus,
-    mainLanguage,
     setAudioUrl,
     setIsPlaying,
     setTranslation,
+    setIsRecording,
     setConversation,
-    triggerRecording,
-    stopRecording,
-    startListening
+    mainLanguage,
+    stopRecording: contextStopRecording, // Import the stopRecording function from context
   } = useTranslationContext();
 
   // Keep services in refs to avoid recreating them on each render
   const translationServiceRef = useRef<TranslationService>(new TranslationService());
-  const speechServiceRef = useRef<SpeechRecognitionService>(new SpeechRecognitionService());
+  const playbackManagerRef = useRef<PlaybackManager>(new PlaybackManager());
 
+  // Start a new recording
+  const startRecording = useCallback(() => {
+    setStatus('Recording...');
+    setIsRecording(true);
+    setAudioUrl(null);
+    setTranslation('');
+    // Start actual recording logic here (e.g., via AudioRecordingManager)
+    // ...
+  }, [setStatus, setIsRecording, setAudioUrl, setTranslation]);
+
+  // Stop the current recording and process the audio
+  const stopRecording = useCallback(async () => {
+    // Call the stopRecording function from context which handles sending to backend
+    return contextStopRecording();
+  }, [contextStopRecording]);
+
+  // Handle playback of translation audio and update conversation
   const handlePlayback = useCallback((response: TranslationResponse, afterPlayback?: () => void) => {
     setTranslation(response.translation || '');
-
-    // Stop speech recognition while playing audio
-    speechServiceRef.current.stop();
 
     // Update conversation based on language
     if (response.audio_language === mainLanguage && response.transcription) {
@@ -58,33 +71,38 @@ export const useAudioRecording = () => {
 
       setStatus(response.translation || '');
       setIsPlaying(true);
-      const url = translationServiceRef.current.playTranslation(translatedAudioBlob, () => {
+      const url = playbackManagerRef.current.playAudio(translatedAudioBlob, () => {
         setIsPlaying(false);
-
-        // Don't clear status or audio URL - keep them visible
-        // Only clear them when a new recording starts or trigger word is detected
-
         afterPlayback?.();
-        startListening(); // Resume speech recognition after playback
+        startRecording();
       });
       setAudioUrl(url);
     } else {
       setAudioUrl(null);
       afterPlayback?.();
-      startListening(); // Resume speech recognition if no audio to play
+      startRecording();
     }
-  }, [mainLanguage, setAudioUrl, setConversation, setIsPlaying, setStatus, setTranslation, startListening]);
+  }, [mainLanguage, setAudioUrl, setConversation, setIsPlaying, setStatus, setTranslation, startRecording]);
 
+  // Stop playback
   const stopPlayback = useCallback(() => {
-    translationServiceRef.current.stop();
+    playbackManagerRef.current.stop();
     setIsPlaying(false);
-    // Don't clear status or audio URL here, let them persist
   }, [setIsPlaying]);
 
+  // Clear and restart recording
+  const clearAndRestart = useCallback(() => {
+    stopRecording();
+    setTimeout(() => {
+      startRecording();
+    }, 100);
+  }, [stopRecording, startRecording]);
+
   return {
-    startRecording: triggerRecording,
+    startRecording,
     stopRecording,
     handlePlayback,
-    stopPlayback
+    stopPlayback,
+    clearAndRestart
   };
 };

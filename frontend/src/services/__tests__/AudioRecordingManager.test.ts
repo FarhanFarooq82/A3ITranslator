@@ -18,39 +18,34 @@ describe('AudioRecordingManager', () => {
     mockSilenceDetectionService = new SilenceDetectionService() as jest.Mocked<SilenceDetectionService>;
   });
 
-  describe('startRecording', () => {
-    it('should start recording and setup silence detection', async () => {
+  describe('startRecording', () => {    it('should start recording and setup silence detection', async () => {
       const mockAnalyser = {};
       const mockOnSilenceCountdown = jest.fn();
-      const mockOnSilenceEnd = jest.fn();
+      const mockOnSoundResumed = jest.fn();
       const mockOnSilenceComplete = jest.fn();
 
-      mockAudioService.startRecording.mockResolvedValue({ analyser: mockAnalyser });
-
-      await audioRecordingManager.startRecording(
-        mockOnSilenceCountdown,
-        mockOnSilenceEnd,
-        mockOnSilenceComplete
-      );
+      mockAudioService.startRecording.mockResolvedValue({ analyser: mockAnalyser });      await audioRecordingManager.startRecording({
+        onSilenceCountdown: mockOnSilenceCountdown,
+        onSoundResumed: mockOnSoundResumed,
+        onSilenceComplete: mockOnSilenceComplete
+      });
 
       expect(mockAudioService.startRecording).toHaveBeenCalled();
       expect(mockSilenceDetectionService.startDetection).toHaveBeenCalledWith(
         mockAnalyser,
         mockOnSilenceCountdown,
-        mockOnSilenceEnd,
+        mockOnSoundResumed,
         mockOnSilenceComplete
       );
     });
 
     it('should throw error if audio service fails', async () => {
       const error = new Error('Failed to start recording');
-      mockAudioService.startRecording.mockRejectedValue(error);
-
-      await expect(audioRecordingManager.startRecording(
-        jest.fn(),
-        jest.fn(),
-        jest.fn()
-      )).rejects.toThrow('Failed to start recording');
+      mockAudioService.startRecording.mockRejectedValue(error);      await expect(audioRecordingManager.startRecording({
+        onSilenceCountdown: jest.fn(),
+        onSoundResumed: jest.fn(),
+        onSilenceComplete: jest.fn()
+      })).rejects.toThrow('Failed to start recording');
     });
   });
 

@@ -10,7 +10,7 @@ interface ConversationMessage {
 interface ConversationHistoryProps {
   conversation: ConversationMessage[];
   mainLanguage: string;
-  conversationEndRef: React.RefObject<HTMLDivElement>;
+  conversationEndRef: React.RefObject<HTMLDivElement|null>;
 }
 
 /**
