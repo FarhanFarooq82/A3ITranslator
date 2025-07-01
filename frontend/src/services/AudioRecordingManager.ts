@@ -1,5 +1,6 @@
 import { AudioService } from './AudioService';
 import { SilenceDetectionService } from './SilenceDetectionService';
+import { AudioValidator } from './AudioValidator';
 
 /**
  * Configuration options for audio validation
@@ -12,15 +13,12 @@ export interface AudioValidationOptions {
 }
 
 /**
- * Callbacks for recording lifecycle events
+ * Actions that recording manager can dispatch
  */
-export interface RecordingCallbacks {
-  /** Called when silence countdown is active with remaining seconds */
-  onSilenceCountdown: (countdown: number) => void;
-  /** Called when sound is detected after silence (speech resumes) */
-  onSoundResumed: () => void;
-  /** Called when silence is detected for the configured duration */
-  onSilenceComplete: () => void;
+export interface RecordingActions {
+  setSilenceCountdown: (countdown: number | null) => void;
+  setStatus: (status: string) => void;
+  stopRecordingWithTranslation: () => Promise<void>;
 }
 
 /**
@@ -34,10 +32,17 @@ export class AudioRecordingManager {
   private recordingStartTime: number | null = null;
   private audioThreshold = 0.01; // Default sensitivity threshold
   private minimumRecordingMs = 750; // Minimum 0.75 seconds
+  private recordingActions: RecordingActions | null = null;
+  private isRecording = false;
+  private processingRequest = false;
+  private resourcesCleanedUp = true;
   
   constructor() {
     this.audioService = new AudioService();
     this.silenceDetectionService = new SilenceDetectionService();
+    
+    // Log instance creation for debugging
+    console.log('AudioRecordingManager: Instance created');
   }
 
   /**
@@ -45,6 +50,8 @@ export class AudioRecordingManager {
    * @param options Configuration options for audio validation
    */
   setAudioValidationOptions(options: AudioValidationOptions) {
+    console.log(`AudioRecordingManager: Setting validation options - threshold: ${options.threshold}, minDuration: ${options.minimumDuration}ms`);
+    
     if (options.threshold !== undefined) {
       this.audioThreshold = options.threshold;
     }
@@ -52,41 +59,115 @@ export class AudioRecordingManager {
       this.minimumRecordingMs = options.minimumDuration;
     }
   }
+  
+  /**
+   * Set the recording actions to be called during recording
+   * @param actions Object containing actions to call during recording
+   */
+  setRecordingActions(actions: RecordingActions): void {
+    console.log('AudioRecordingManager: Setting recording actions');
+    this.recordingActions = actions;
+  }
 
   /**
    * Start recording audio with silence detection
-   * @param callbacks Functions to call during recording process
    * @returns The analyzer node for visualizations
    */
-  async startRecording(callbacks: RecordingCallbacks): Promise<AnalyserNode> {
-    this.audioSamples = []; // Clear previous samples
-    this.recordingStartTime = Date.now();
+  async startRecording(): Promise<AnalyserNode> {
+    console.log('AudioRecordingManager: Starting recording');
     
-    const { analyser } = await this.audioService.startRecording();
-    this.currentAnalyser = analyser;
+    // Prevent multiple concurrent startRecording calls
+    if (this.processingRequest) {
+      console.warn('AudioRecordingManager: Already processing a recording request, ignoring');
+      throw new Error('Already processing a recording request');
+    }
     
-    // Set up audio sampling
-    const bufferLength = analyser.fftSize;
-    const dataArray = new Float32Array(bufferLength);
-    
-    const collectSamples = () => {
-      if (this.currentAnalyser && this.audioService.isRecording()) {
-        this.currentAnalyser.getFloatTimeDomainData(dataArray);
-        this.audioSamples.push(new Float32Array(dataArray));
-        requestAnimationFrame(collectSamples);
+    try {
+      this.processingRequest = true;
+      
+      // Make sure we're starting with a clean slate
+      if (!this.resourcesCleanedUp) {
+        console.log('AudioRecordingManager: Cleaning up resources before starting new recording');
+        this.cleanup();
       }
-    };
-    
-    // Start collecting samples
-    requestAnimationFrame(collectSamples);
+      
+      this.audioSamples = []; // Clear previous samples
+      this.recordingStartTime = Date.now();
+      this.isRecording = true;
+      this.resourcesCleanedUp = false;
+      
+      console.log('AudioRecordingManager: Initializing audio recording');
+      const { analyser } = await this.audioService.startRecording();
+      this.currentAnalyser = analyser;
+      
+      // Set up audio sampling
+      const bufferLength = analyser.fftSize;
+      const dataArray = new Float32Array(bufferLength);
+      
+      const collectSamples = () => {
+        if (this.isRecording && this.currentAnalyser && this.audioService.isRecording()) {
+          try {
+            this.currentAnalyser.getFloatTimeDomainData(dataArray);
+            this.audioSamples.push(new Float32Array(dataArray));
+            requestAnimationFrame(collectSamples);
+          } catch (error) {
+            console.error('AudioRecordingManager: Error collecting audio samples:', error);
+            // Don't request another frame if there was an error
+          }
+        }
+      };
+      
+      // Start collecting samples
+      requestAnimationFrame(collectSamples);
+
+      console.log('AudioRecordingManager: Starting silence detection');
+      
+      // Start silence detection with direct state updates via actions
       this.silenceDetectionService.startDetection(
-      analyser,
-      callbacks.onSilenceCountdown,
-      callbacks.onSoundResumed,
-      callbacks.onSilenceComplete
-    );
-    
-    return analyser;
+        analyser,
+        (countdown: number) => {
+          if (this.recordingActions && this.isRecording) {
+            console.log(`AudioRecordingManager: Silence countdown: ${countdown}`);
+            this.recordingActions.setSilenceCountdown(countdown);
+          }
+        },
+        () => {
+          if (this.recordingActions && this.isRecording) {
+            console.log('AudioRecordingManager: Sound resumed after silence');
+            this.recordingActions.setSilenceCountdown(null);
+            this.recordingActions.setStatus('Recording...');
+          }
+        },
+        async () => {
+          // Silence detected, stop recording
+          if (this.recordingActions && this.isRecording) {
+            console.log('AudioRecordingManager: Complete silence detected, stopping recording');
+            this.recordingActions.setSilenceCountdown(null);
+            
+            // Set this flag to prevent new attempts to start recording while we're stopping
+            this.isRecording = false;
+            
+            try {
+              await this.recordingActions.stopRecordingWithTranslation();
+            } catch (error) {
+              console.error('AudioRecordingManager: Error in stopRecordingWithTranslation:', error);
+              // Ensure we reset isRecording if there's an error
+              this.isRecording = false;
+            }
+          }
+        }
+      );
+      
+      console.log('AudioRecordingManager: Recording started successfully');
+      return analyser;
+    } catch (error) {
+      console.error('AudioRecordingManager: Error starting recording:', error);
+      this.isRecording = false;
+      this.cleanup();
+      throw error;
+    } finally {
+      this.processingRequest = false;
+    }
   }
   
   /**
@@ -95,17 +176,21 @@ export class AudioRecordingManager {
   getAnalyserNode(): AnalyserNode | null {
     return this.currentAnalyser;
   }
-
+  
   /**
    * Check if the recorded audio contains valid speech 
+   * Enhanced with improved audio quality analysis
    */
   hasValidAudioContent(): boolean {
-    if (this.audioSamples.length === 0) return false;
+    if (this.audioSamples.length === 0) {
+      console.log('AudioRecordingManager: No audio samples collected');
+      return false;
+    }
     
     // Check recording duration
     const recordingDuration = this.recordingStartTime ? Date.now() - this.recordingStartTime : 0;
     if (recordingDuration < this.minimumRecordingMs) {
-      console.log(`Recording too short: ${recordingDuration}ms < ${this.minimumRecordingMs}ms`);
+      console.log(`AudioRecordingManager: Recording too short: ${recordingDuration}ms < ${this.minimumRecordingMs}ms`);
       return false;
     }
     
@@ -114,8 +199,13 @@ export class AudioRecordingManager {
     let sampleCount = 0;
     let peakVolume = 0;
     let significantSamples = 0;
+    let zeroCrossings = 0;
+    let prevSample = 0;
+    let consecutiveFlats = 0;
+    let maxConsecutiveFlats = 0;
+    let dynamicRange = 0;
     
-    // First pass: calculate RMS and find peak volume
+    // Enhanced audio analysis
     for (const buffer of this.audioSamples) {
       for (let i = 0; i < buffer.length; i++) {
         const sampleValue = buffer[i];
@@ -123,65 +213,168 @@ export class AudioRecordingManager {
         peakVolume = Math.max(peakVolume, Math.abs(sampleValue));
         sampleCount++;
         
-        // Count samples that are above a minimal threshold
+        // Count significant samples (above noise floor)
         if (Math.abs(sampleValue) > 0.005) {
           significantSamples++;
         }
+        
+        // Count zero-crossings (indicator of audio frequency content)
+        if ((prevSample < 0 && sampleValue >= 0) || (prevSample >= 0 && sampleValue < 0)) {
+          zeroCrossings++;
+        }
+        
+        // Detect flat regions (indicator of digital silence or clipping)
+        if (i > 0 && Math.abs(sampleValue - buffer[i-1]) < 0.0001) {
+          consecutiveFlats++;
+        } else {
+          maxConsecutiveFlats = Math.max(maxConsecutiveFlats, consecutiveFlats);
+          consecutiveFlats = 0;
+        }
+        
+        prevSample = sampleValue;
       }
     }
     
     if (sampleCount === 0) return false;
     
+    // Calculate advanced audio metrics
     const rms = Math.sqrt(sumOfSquares / sampleCount);
     const significantRatio = significantSamples / sampleCount;
+    const zeroCrossingRate = zeroCrossings / sampleCount;
+    const flatRatio = maxConsecutiveFlats / sampleCount;
     
-    console.log(`Audio metrics: RMS=${rms.toFixed(6)}, Peak=${peakVolume.toFixed(6)}, Significant=${(significantRatio*100).toFixed(2)}%, Threshold=${this.audioThreshold}`);
+    // Sort all samples to calculate dynamic range (difference between quietest and loudest non-zero samples)
+    const allSamples = this.audioSamples.flatMap(buffer => Array.from(buffer));
+    const nonZeroSamples = allSamples.filter(s => Math.abs(s) > 0.001);
+    if (nonZeroSamples.length > 0) {
+      nonZeroSamples.sort((a, b) => Math.abs(a) - Math.abs(b));
+      const lowest = Math.abs(nonZeroSamples[0]);
+      const highest = Math.abs(nonZeroSamples[nonZeroSamples.length - 1]);
+      dynamicRange = highest / (lowest || 0.001); // Avoid division by zero
+    }
     
-    // Consider audio valid if:
-    // 1. RMS is above threshold OR
-    // 2. Peak volume is significant and we have enough significant samples
-    return (
-      rms > this.audioThreshold || 
-      (peakVolume > this.audioThreshold * 3 && significantRatio > 0.02)
-    );
+    console.log(`AudioRecordingManager: Enhanced audio metrics: RMS=${rms.toFixed(6)}, Peak=${peakVolume.toFixed(6)}, ` +
+                `Significant=${(significantRatio*100).toFixed(2)}%, ZeroCrossings=${zeroCrossingRate.toFixed(4)}, ` +
+                `FlatRatio=${flatRatio.toFixed(4)}, DynamicRange=${dynamicRange.toFixed(1)}, Threshold=${this.audioThreshold}`);
+    
+    // Enhanced decision logic:
+    // 1. Base checks for volume (RMS and peak amplitude)
+    const volumeCheck = rms > this.audioThreshold || 
+                        (peakVolume > this.audioThreshold * 3 && significantRatio > 0.02);
+    
+    // 2. Check for normal speech pattern indicators (speech typically has 0.01-0.1 zero crossing rate)
+    const speechPatternCheck = zeroCrossingRate > 0.005 && zeroCrossingRate < 0.15;
+    
+    // 3. Check for unnatural patterns (like digital silence, consistent noise, or tones)
+    const naturalSoundCheck = flatRatio < 0.1 && dynamicRange > 2.0;
+    
+    const isValid = volumeCheck && speechPatternCheck && naturalSoundCheck;
+    console.log(`AudioRecordingManager: Audio validation result: ${isValid ? 'VALID' : 'INVALID'} audio content`);
+    
+    // Return true only if all checks pass
+    return isValid;
   }
-
+  
+  /**
+   * Check if the manager is currently recording
+   */
+  getRecordingState(): boolean {
+    return this.isRecording && this.audioService.isRecording();
+  }
+  
   /**
    * Stop recording and get the audio blob
    * @returns Audio blob if valid speech detected, null otherwise
    */
   async stopRecording(): Promise<Blob | null> {
-    this.silenceDetectionService.stop();
+    console.log('AudioRecordingManager: Stopping recording');
     
-    // Check if we have valid audio before processing
-    if (!this.hasValidAudioContent()) {
-      console.log("Audio rejected: No valid speech detected");
-      // Don't clear audio context yet, just return null to indicate invalid audio
+    // Prevent stopping if already stopped
+    if (!this.isRecording && !this.audioService.isRecording()) {
+      console.warn('AudioRecordingManager: Not currently recording, ignoring stop request');
       return null;
     }
     
-    // Reset samples for next recording
-    this.audioSamples = [];
-    this.recordingStartTime = null;
+    // Prevent multiple concurrent stopRecording calls
+    if (this.processingRequest) {
+      console.warn('AudioRecordingManager: Already processing a recording request, ignoring');
+      return null;
+    }
     
-    return await this.audioService.stopRecording();
+    try {
+      this.processingRequest = true;
+      this.isRecording = false;
+      
+      // Stop silence detection first
+      console.log('AudioRecordingManager: Stopping silence detection');
+      this.silenceDetectionService.stop();
+      
+      // Get the audio blob
+      console.log('AudioRecordingManager: Stopping audio service recording');
+      const audioBlob = await this.audioService.stopRecording();
+      
+      // If no blob was returned, return null
+      if (!audioBlob) {
+        console.log('AudioRecordingManager: No audio blob was returned');
+        return null;
+      }
+      
+      console.log(`AudioRecordingManager: Original audio blob size: ${audioBlob.size} bytes, type: ${audioBlob.type}`);
+      
+      if (audioBlob.size === 0) {
+        console.warn('AudioRecordingManager: Warning: Original audio blob is empty (0 bytes)');
+        return null;
+      }
+
+      // Apply silence trimming to remove silence from beginning and end
+      console.log('AudioRecordingManager: Applying silence trimming to audio recording...');
+      const trimmedBlob = await this.silenceDetectionService.trimSilence(audioBlob);
+      console.log(`AudioRecordingManager: Trimmed audio blob size: ${trimmedBlob?.size || 0} bytes`);
+      
+      if (!trimmedBlob || trimmedBlob.size === 0) {
+        console.warn('AudioRecordingManager: Warning: Trimming resulted in empty audio, returning original blob');
+        return audioBlob; // Return original if trimming failed
+      }
+      
+      console.log('AudioRecordingManager: Silence trimming complete');
+      
+      // Perform post-recording validation using AudioValidator
+      console.log('AudioRecordingManager: Validating recording with AudioValidator');
+      const hasValidSpeech = await AudioValidator.validateRecording(trimmedBlob, 0.035);
+      
+      if (hasValidSpeech) {
+        // Return the trimmed blob if it contains valid speech
+        console.log('AudioRecordingManager: Valid speech detected, returning audio blob');
+        return trimmedBlob;
+      } else {
+        console.log('AudioRecordingManager: Audio rejected: Post-recording analysis found no valid speech');
+        return null;
+      }
+    } catch (error) {
+      console.error('AudioRecordingManager: Error in stopRecording:', error);
+      return null;
+    } finally {
+      // Reset samples for next recording
+      this.audioSamples = [];
+      this.recordingStartTime = null;
+      this.processingRequest = false;
+    }
   }
   
   /**
    * Clean up all resources used by the recording manager
    */
   cleanup(): void {
+    console.log('AudioRecordingManager: Cleaning up resources');
+    
+    this.isRecording = false;
     this.audioService.cleanup();
     this.silenceDetectionService.stop();
     this.currentAnalyser = null;
     this.audioSamples = [];
     this.recordingStartTime = null;
-  }
-
-  /**
-   * Check if currently recording
-   */
-  isRecording(): boolean {
-    return this.audioService.isRecording();
+    this.resourcesCleanedUp = true;
+    
+    console.log('AudioRecordingManager: Resource cleanup complete');
   }
 }

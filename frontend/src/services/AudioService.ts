@@ -41,7 +41,6 @@ export class AudioService {
       throw new Error('Failed to start recording: ' + error);
     }
   }
-
   stopRecording(): Promise<Blob> {
     return new Promise((resolve, reject) => {
       if (!this.RTCRecorder) {
@@ -51,9 +50,23 @@ export class AudioService {
 
       this.RTCRecorder.stopRecording(() => {
         const blob = this.RTCRecorder?.getBlob();
-        if (blob) {
+        console.log(`AudioService: Recording stopped, blob size: ${blob?.size || 0} bytes, type: ${blob?.type || 'unknown'}`);
+        
+        if (blob && blob.size > 0) {
           resolve(blob);
         } else {
+          // If the RecordRTC blob is empty but we have chunks, try to create a blob from chunks
+          if (this.audioChunks.length > 0) {
+            console.log(`AudioService: Using ${this.audioChunks.length} collected chunks as fallback`);
+            const combinedBlob = new Blob(this.audioChunks, { type: 'audio/ogg' });
+            if (combinedBlob.size > 0) {
+              console.log(`AudioService: Created fallback blob of ${combinedBlob.size} bytes`);
+              resolve(combinedBlob);
+              this.cleanup();
+              return;
+            }
+          }
+          
           reject(new Error('Failed to get recording blob'));
         }
         this.cleanup();
