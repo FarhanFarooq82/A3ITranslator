@@ -27,10 +27,21 @@ const RecordingControls: React.FC<RecordingControlsProps> = ({
 }) => (
   <div className="flex gap-2 mb-4">
     {showPause && (
-      <Button variant="secondary" onClick={handlePause}>Pause</Button>
+      <Button 
+        variant="secondary" 
+        onClick={handlePause} 
+        title="Pause recording - this will release the microphone and remove current recording"
+      >
+        Pause
+      </Button>
     )}
     {showUnpause && (
-      <Button variant="secondary" onClick={handleUnpause}>Unpause</Button>
+      <Button 
+        variant="secondary" 
+        onClick={handleUnpause} 
+      >
+        Unpause
+      </Button>
     )}
     {showClearRestart && (
       <Button variant="outline" onClick={handleClearRestart}>Clear/Restart</Button>

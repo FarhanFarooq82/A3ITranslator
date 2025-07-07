@@ -1,6 +1,4 @@
 import { AudioService } from './AudioService';
-import { SilenceDetectionService } from './SilenceDetectionService';
-import { AudioValidator } from './AudioValidator';
 
 /**
  * Configuration options for audio validation
@@ -26,7 +24,6 @@ export interface RecordingActions {
  */
 export class AudioRecordingManager {
   private audioService: AudioService;
-  private silenceDetectionService: SilenceDetectionService;
   private currentAnalyser: AnalyserNode | null = null;
   private audioSamples: Float32Array[] = [];
   private recordingStartTime: number | null = null;
@@ -39,7 +36,6 @@ export class AudioRecordingManager {
   
   constructor() {
     this.audioService = new AudioService();
-    this.silenceDetectionService = new SilenceDetectionService();
     
     // Log instance creation for debugging
     console.log('AudioRecordingManager: Instance created');
@@ -120,28 +116,27 @@ export class AudioRecordingManager {
       // Start collecting samples
       requestAnimationFrame(collectSamples);
 
-      console.log('AudioRecordingManager: Starting silence detection');
+      console.log('AudioRecordingManager: Setting up speech detection callbacks');
       
-      // Start silence detection with direct state updates via actions
-      this.silenceDetectionService.startDetection(
-        analyser,
-        (countdown: number) => {
+      // Set up speech callbacks in AudioService instead of using SilenceDetectionService
+      this.audioService.setSpeechCallbacks({
+        onSpeaking: () => {
           if (this.recordingActions && this.isRecording) {
+            console.log('AudioRecordingManager: Speech detected');
+            this.recordingActions.setSilenceCountdown(null);
+            this.recordingActions.setStatus('Listening...');
+          }
+        },
+        onSilence: (countdown: number | null) => {
+          if (this.recordingActions && this.isRecording && countdown !== null) {
             console.log(`AudioRecordingManager: Silence countdown: ${countdown}`);
             this.recordingActions.setSilenceCountdown(countdown);
           }
         },
-        () => {
-          if (this.recordingActions && this.isRecording) {
-            console.log('AudioRecordingManager: Sound resumed after silence');
-            this.recordingActions.setSilenceCountdown(null);
-            this.recordingActions.setStatus('Recording...');
-          }
-        },
-        async () => {
+        onSilenceComplete: async () => {
           // Silence detected, stop recording
           if (this.recordingActions && this.isRecording) {
-            console.log('AudioRecordingManager: Complete silence detected, stopping recording');
+            console.log('AudioRecordingManager: Complete silence detected, stopping listening');
             this.recordingActions.setSilenceCountdown(null);
             
             // Set this flag to prevent new attempts to start recording while we're stopping
@@ -156,7 +151,7 @@ export class AudioRecordingManager {
             }
           }
         }
-      );
+      });
       
       console.log('AudioRecordingManager: Recording started successfully');
       return analyser;
@@ -305,10 +300,6 @@ export class AudioRecordingManager {
       this.processingRequest = true;
       this.isRecording = false;
       
-      // Stop silence detection first
-      console.log('AudioRecordingManager: Stopping silence detection');
-      this.silenceDetectionService.stop();
-      
       // Get the audio blob
       console.log('AudioRecordingManager: Stopping audio service recording');
       const audioBlob = await this.audioService.stopRecording();
@@ -326,28 +317,24 @@ export class AudioRecordingManager {
         return null;
       }
 
-      // Apply silence trimming to remove silence from beginning and end
-      console.log('AudioRecordingManager: Applying silence trimming to audio recording...');
-      const trimmedBlob = await this.silenceDetectionService.trimSilence(audioBlob);
-      console.log(`AudioRecordingManager: Trimmed audio blob size: ${trimmedBlob?.size || 0} bytes`);
+      // For now, we skip trimming since we no longer have SilenceDetectionService
+      // Future: Implement a trimSilence function in AudioService if needed
       
-      if (!trimmedBlob || trimmedBlob.size === 0) {
-        console.warn('AudioRecordingManager: Warning: Trimming resulted in empty audio, returning original blob');
-        return audioBlob; // Return original if trimming failed
-      }
+      // Check if speech was detected using Hark's real-time detection
+      const speechWasDetected = this.audioService.hasSpeechDetected();
       
-      console.log('AudioRecordingManager: Silence trimming complete');
-      
-      // Perform post-recording validation using AudioValidator
-      console.log('AudioRecordingManager: Validating recording with AudioValidator');
-      const hasValidSpeech = await AudioValidator.validateRecording(trimmedBlob, 0.035);
-      
-      if (hasValidSpeech) {
-        // Return the trimmed blob if it contains valid speech
-        console.log('AudioRecordingManager: Valid speech detected, returning audio blob');
-        return trimmedBlob;
+      if (speechWasDetected) {
+        // Return the audio blob if speech was detected during recording
+        console.log('AudioRecordingManager: Speech was detected during recording, returning audio blob');
+        return audioBlob;
       } else {
-        console.log('AudioRecordingManager: Audio rejected: Post-recording analysis found no valid speech');
+        console.log('AudioRecordingManager: Audio rejected: No speech detected during recording');
+        
+        // Update status if we have actions available
+        if (this.recordingActions) {
+          this.recordingActions.setStatus('No speech detected. Please try again.');
+        }
+        
         return null;
       }
     } catch (error) {
@@ -369,7 +356,6 @@ export class AudioRecordingManager {
     
     this.isRecording = false;
     this.audioService.cleanup();
-    this.silenceDetectionService.stop();
     this.currentAnalyser = null;
     this.audioSamples = [];
     this.recordingStartTime = null;

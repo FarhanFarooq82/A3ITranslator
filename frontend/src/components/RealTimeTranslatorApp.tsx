@@ -51,7 +51,7 @@ export const RealTimeTranslatorApp = () => {
   // Organized UI state for easier maintenance
   const viewState = {
     session: {
-      showStartButton: state.sessionState === SessionState.IDLE && state.operationState !== OperationState.PREPARING,
+      showStartButton: (state.sessionState === SessionState.IDLE ||  state.sessionState === SessionState.ENDED) && state.operationState !== OperationState.PREPARING,
       showStopButton: state.sessionState === SessionState.ACTIVE || state.sessionState === SessionState.PAUSED,
       showConfirmDialog: state.sessionState === SessionState.ENDING_CONFIRMATION,
       showCountdown: state.operationState === OperationState.PREPARING,
@@ -59,9 +59,11 @@ export const RealTimeTranslatorApp = () => {
     },
     recording: {
       showPauseButton: state.operationState === OperationState.RECORDING && state.sessionState === SessionState.ACTIVE,
-      showUnpauseButton: state.sessionState === SessionState.PAUSED,      showResumeButton: state.sessionState === SessionState.ACTIVE && 
-                      state.operationState !== OperationState.RECORDING && 
-                      state.operationState !== OperationState.PLAYING,
+      showUnpauseButton: state.sessionState === SessionState.PAUSED,
+      showResumeButton: state.sessionState === SessionState.ACTIVE && 
+                      state.operationState === OperationState.IDLE &&
+                      !!state.sessionId,
+      showResumeFromPause: state.sessionState === SessionState.PAUSED,
       showRestartButton: state.operationState === OperationState.RECORDING && state.sessionState === SessionState.ACTIVE,
       showVisualizer: state.operationState === OperationState.RECORDING && 
                      state.sessionState === SessionState.ACTIVE && 
@@ -94,11 +96,30 @@ export const RealTimeTranslatorApp = () => {
             </div>
           )}
           
-          {/* Resume Session button (when paused) */}
+          {/* Resume Session button (when active but not recording) */}
           {viewState.recording.showResumeButton && (
             <div className="w-full flex justify-end mb-2">
-              <Button onClick={recording.resumeRecording} variant="default" size="sm">
-                Resume Session
+              <Button 
+                onClick={recording.resumeSessionRecording} 
+                variant="default" 
+                size="sm"
+                title="Resume recording after browser restart or interruption"
+              >
+                Resume Recording
+              </Button>
+            </div>
+          )}
+          
+          {/* Unpause button when session is paused */}
+          {viewState.recording.showResumeFromPause && (
+            <div className="w-full flex justify-end mb-2">
+              <Button 
+                onClick={recording.resumeRecording} 
+                variant="default" 
+                size="sm"
+                title="Continue recording after being paused"
+              >
+                Unpause Recording
               </Button>
             </div>
           )}

@@ -15,8 +15,13 @@ export const useSession = () => {
     const id = sessionService.generateSessionId();
     const expiry = Date.now() + sessionService.getSessionDuration();
     
-    // Save session to local storage
-    sessionService.saveSession(id);
+    // Save session to local storage with additional data
+    sessionService.saveSession(id, {
+      mainLanguage: state.mainLanguage,
+      otherLanguage: state.otherLanguage,
+      isPremium: state.isPremium,
+      sessionState: SessionState.ACTIVE
+    });
     
     // Update state
     dispatch({
@@ -24,7 +29,7 @@ export const useSession = () => {
       id,
       expiry
     });
-  }, [dispatch, sessionService]);
+  }, [dispatch, sessionService, state.mainLanguage, state.otherLanguage, state.isPremium]);
 
   const endSession = useCallback(() => {
     // Clear session data
@@ -49,13 +54,21 @@ export const useSession = () => {
   useEffect(() => {
     const session = sessionService.loadSession();
     if (session && sessionService.isValidSession(session)) {
+      console.log('Restoring session from localStorage:', session);
+      
+      // Restore the session with all saved data
       dispatch({
-        type: ActionType.START_SESSION,
+        type: ActionType.RESTORE_SESSION,
         id: session.id,
         expiry: session.expiry,
+        conversation: [],
+        mainLanguage: (session.mainLanguage as string) || state.mainLanguage,
+        otherLanguage: (session.otherLanguage as string) || state.otherLanguage,
+        isPremium: (session.isPremium as boolean) || state.isPremium,
+        sessionState: session.sessionState as SessionState || SessionState.ACTIVE
       });
     }
-  }, [dispatch, sessionService]); // Set up periodic session validation check
+  }, [dispatch, sessionService, state.mainLanguage, state.otherLanguage, state.isPremium]); // Set up periodic session validation check
   useEffect(() => {
     if (state.sessionState !== SessionState.ACTIVE) return;
     

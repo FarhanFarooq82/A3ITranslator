@@ -421,17 +421,43 @@ export const useRecording = () => {
   // Pause recording
   const pauseRecording = useCallback(() => {
     if (state.operationState === OperationState.RECORDING) {
+      // Clean up visualizer and recording resources
       audioManager.current.cleanup();
+      
+      // Set the status to paused
       dispatch({ type: ActionType.PAUSE_SESSION });
+      
+      // Clear the visualizer
+      dispatch({ type: ActionType.SET_ANALYZER_NODE, node: null });
+      
+      // Update the status message
+      dispatch({ 
+        type: ActionType.UPDATE_STATE, 
+        updates: { statusMessage: 'Recording paused. Press Unpause to continue.' } 
+      });
     }
   }, [dispatch, state.operationState]);
 
   // Resume recording
   const resumeRecording = useCallback(() => {
-    dispatch({ type: ActionType.RESUME_SESSION });
-    // Use the function reference to avoid circular dependency
-    startRecordingRef.current();
-  }, [dispatch]);
+    if (state.sessionState === SessionState.PAUSED) {
+      // Set session state to active
+      dispatch({ type: ActionType.RESUME_SESSION });
+      
+      // Update the status message
+      dispatch({ 
+        type: ActionType.UPDATE_STATE, 
+        updates: { statusMessage: 'Resuming...' } 
+      });
+      
+      // Start a new recording
+      setTimeout(() => {
+        if (startRecordingRef.current) {
+          startRecordingRef.current();
+        }
+      }, 500);
+    }
+  }, [dispatch, state.sessionState]);
 
   // Replay last translation
   const replayLastTranslation = useCallback(async () => {
@@ -445,6 +471,50 @@ export const useRecording = () => {
       await playTranslationAudio(audioBlob, state.lastAudioUrl);
     }
   }, [dispatch, state.lastAudioUrl, playTranslationAudio]);
+
+  // Resume recording after browser restart
+  const resumeSessionRecording = useCallback(() => {
+    console.log('%cRESUME SESSION RECORDING: Restoring recording after browser restart', 'background: #673AB7; color: white;');
+    
+    // First, ensure we have a valid sessionId
+    if (!state.sessionId) {
+      console.error('Cannot resume recording: No valid session ID');
+      dispatch({
+        type: ActionType.UPDATE_STATE,
+        updates: { statusMessage: 'Cannot resume session: No valid session ID' }
+      });
+      return;
+    }
+    
+    try {
+      // Update UI to show we're resuming the session
+      dispatch({ 
+        type: ActionType.UPDATE_STATE, 
+        updates: { statusMessage: 'Resuming previous session...' } 
+      });
+      
+      // Set session state to active if it's not already
+      if (state.sessionState !== SessionState.ACTIVE) {
+        dispatch({ type: ActionType.RESUME_SESSION });
+      }
+      
+      // Start a new recording
+      setTimeout(() => {
+        if (startRecordingRef.current) {
+          console.log('RESUME: Starting recording after session validation');
+          startRecordingRef.current(OperationState.IDLE);
+        }
+      }, 500);
+    } catch (error) {
+      console.error('Error resuming session:', error);
+      dispatch({ 
+        type: ActionType.UPDATE_STATE, 
+        updates: { 
+          statusMessage: `Failed to resume session: ${error instanceof Error ? error.message : 'Unknown error'}`
+        } 
+      });
+    }
+  }, [dispatch, state.sessionId, state.sessionState]);
 
   // Clean up resources
   const cleanup = useCallback(() => {
@@ -489,6 +559,7 @@ export const useRecording = () => {
     // Session control
     pauseRecording,
     resumeRecording,
+    resumeSessionRecording,
     cleanup
   };
 };

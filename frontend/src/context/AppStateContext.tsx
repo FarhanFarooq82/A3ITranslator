@@ -83,7 +83,7 @@ type Action =
   | { type: ActionType.REQUEST_END_SESSION }
   | { type: ActionType.CONFIRM_END_SESSION }
   | { type: ActionType.CANCEL_END_SESSION }
-  | { type: ActionType.RESTORE_SESSION; id: string; expiry: number; conversation: ConversationItem[]; mainLanguage: string; otherLanguage: string; isPremium: boolean }
+  | { type: ActionType.RESTORE_SESSION; id: string; expiry: number; conversation?: ConversationItem[]; mainLanguage: string; otherLanguage: string; isPremium: boolean; sessionState?: SessionState }
   | { type: ActionType.SAVE_SESSION }
   
   // Operation actions
@@ -185,6 +185,11 @@ function appReducer(state: AppState, action: Action): AppState {
       
     case ActionType.PAUSE_SESSION:
       manager.dispatch(StateEvent.PAUSE_SESSION);
+      // When pausing, update the operation state to idle
+      manager.updateState({ 
+        operationState: OperationState.IDLE,
+        analyserNode: null
+      });
       break;
       
     case ActionType.RESUME_SESSION:
@@ -216,15 +221,14 @@ function appReducer(state: AppState, action: Action): AppState {
       manager.updateState({
         sessionId: action.id,
         sessionExpiry: action.expiry,
-        conversation: action.conversation,
+        conversation: action.conversation || [],
         mainLanguage: action.mainLanguage,
         otherLanguage: action.otherLanguage,
-        isPremium: action.isPremium
+        isPremium: action.isPremium,
+        sessionState: action.sessionState || SessionState.ACTIVE,
+        operationState: OperationState.IDLE,
+        statusMessage: 'Session restored. Click Resume to continue recording.'
       });
-      // Immediately prepare to start recording
-      setTimeout(() => {
-        manager.dispatch(StateEvent.START_COUNTDOWN, { countdown: 3 });
-      }, 0);
       break;
       
     case ActionType.SAVE_SESSION:

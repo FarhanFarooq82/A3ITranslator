@@ -14,25 +14,35 @@ export class SessionService {
     );
   }
 
-  saveSession(id: string): void {
+  saveSession(id: string, additionalData: Record<string, unknown> = {}): void {
     const expiry = Date.now() + this.sessionDuration;
     localStorage.setItem(
       this.storageKey,
-      JSON.stringify({ id, expiry })
+      JSON.stringify({ 
+        id, 
+        expiry, 
+        timestamp: new Date().toISOString(),
+        ...additionalData
+      })
     );
   }
 
-  loadSession(): { id: string; expiry: number } | null {
+  loadSession(): { id: string; expiry: number; timestamp?: string; [key: string]: unknown } | null {
     const sessionData = localStorage.getItem(this.storageKey);
     if (!sessionData) return null;
 
-    const session = JSON.parse(sessionData);
-    if (Date.now() < session.expiry) {
-      return session;
+    try {
+      const session = JSON.parse(sessionData);
+      if (Date.now() < session.expiry) {
+        return session;
+      }
+      this.clearSession();
+      return null;
+    } catch (e) {
+      console.error('Error parsing session data:', e);
+      this.clearSession();
+      return null;
     }
-
-    this.clearSession();
-    return null;
   }
 
   clearSession(): void {
