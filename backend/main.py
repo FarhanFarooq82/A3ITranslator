@@ -562,3 +562,125 @@ def available_voices():
     """Return the full list of voices for the region (for use in TTS synthesis)."""
     voices = get_azure_voices()
     return JSONResponse(voices)
+
+@app.post("/translate-text/")
+async def translate_text(
+    text: str = Form(...),
+    source_language: str = Form(...),
+    target_language: str = Form(...),
+    is_premium: str = Form("false")
+):
+    try:
+        # Convert is_premium string to boolean
+        is_premium_bool = is_premium.lower() == "true"
+        
+        # Normalize language codes
+        source_language_normalized = source_language.lower().split('-')[0] if source_language else "en"
+        target_language_normalized = target_language  # Keep full code for TTS
+        
+        # Skip actual translation if source and target are the same
+        if source_language_normalized == target_language_normalized.lower().split('-')[0]:
+            logger.info(f"Source and target languages are the same ({source_language_normalized}), skipping translation")
+            translated_text = text
+        else:
+            # Use Gemini for translation
+            enhanced_user_message = f"""
+            Translate the following text from {source_language} to {target_language}.
+            Keep the translation simple and natural, preserving the tone of the original text.
+            Return only the translated text, with no additional notes or explanations.
+            
+            Text to translate: {text}
+            """
+            
+            try:
+                response = gemini_tts_model.models.generate_content(
+                    model="gemini-1.5-flash-latest",  # Using Gemini 1.5 Flash model for text translation
+                    contents=[types.Content(
+                        role="user",
+                        parts=[types.Part(text=enhanced_user_message)]
+                    )],
+                    config=GenerateContentConfig(
+                        temperature=0.2,  # Lower temperature for more accurate translation
+                        top_p=0.95,
+                        top_k=40,
+                        max_output_tokens=1024,
+                    )
+                )
+                
+                # Extract the translated text from Gemini response
+                if not response.candidates or not response.candidates[0].content.parts:
+                    raise HTTPException(status_code=500, detail="No translation was returned from the model")
+                    
+                translated_text = response.candidates[0].content.parts[0].text.strip()
+                logger.info(f"Successfully translated text from {source_language} to {target_language}")
+                
+            except Exception as e:
+                logger.error(f"Error during text translation: {e}")
+                raise HTTPException(status_code=500, detail=f"Translation failed: {e}")
+
+        # Log the translated text
+        logger.info(f"Translated welcome message from {source_language} to {target_language}")
+        
+        # Determine gender for TTS - default to neutral
+        tts_gender = texttospeech.SsmlVoiceGender.NEUTRAL
+        
+        # Generate speech for the translated text
+        audio_base64 = None
+        try:
+            logger.info(f"Generating TTS audio for language: {target_language_normalized}")
+            
+            if is_premium_bool:
+                try:
+                    # Use Azure TTS for premium users
+                    logger.info("Using premium Azure TTS for welcome message")
+                    audio_content_bytes = synthesize_text_to_audio_gemini(
+                        text=translated_text,
+                        language_code=target_language_normalized,
+                        gender=tts_gender,
+                        tone="friendly"  # Use a friendly tone for welcome message
+                    )
+                    audio_base64 = base64.b64encode(audio_content_bytes).decode('utf-8')
+                    logger.info(f"Successfully generated premium audio, base64 length: {len(audio_base64)}")
+                except Exception as e:
+                    logger.error(f"Premium TTS failed for welcome message: {e}")
+                    # Fall back to standard TTS if premium fails
+                    logger.info("Falling back to standard TTS")
+                    audio_content_bytes = synthesize_text_to_audio(
+                        text=translated_text,
+                        language_code=target_language_normalized,
+                        gender=tts_gender
+                    )
+                    audio_base64 = base64.b64encode(audio_content_bytes).decode('utf-8')
+                    logger.info(f"Successfully generated standard audio (fallback), base64 length: {len(audio_base64)}")
+            else:
+                # Standard TTS for non-premium users
+                logger.info("Using standard TTS for welcome message")
+                audio_content_bytes = synthesize_text_to_audio(
+                    text=translated_text,
+                    language_code=target_language_normalized,
+                    gender=tts_gender
+                )
+                audio_base64 = base64.b64encode(audio_content_bytes).decode('utf-8')
+                logger.info(f"Successfully generated standard audio, base64 length: {len(audio_base64)}")
+        except Exception as e:
+            logger.error(f"All TTS methods failed: {e}")
+            audio_base64 = None  # Ensure it's set to None if all TTS attempts fail
+        
+        # Return the translated text and its audio
+        response_data = {
+            "translation": translated_text,
+            "translation_audio": audio_base64,
+            "translation_audio_mime_type": DEFAULT_AUDIO_MIME_TYPE
+        }
+        
+        logger.info(f"Returning response with translation text length: {len(translated_text)}, " +
+                   f"audio data present: {audio_base64 is not None}")
+        
+        return response_data
+        
+    except HTTPException as http_exc:
+        # Re-raise HTTP exceptions
+        raise http_exc
+    except Exception as e:
+        logger.error(f"Error in translate_text endpoint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")

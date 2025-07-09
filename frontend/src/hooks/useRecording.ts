@@ -51,31 +51,32 @@ export const useRecording = () => {
 
   // Process translation response and update conversation
   const processTranslationResponse = useCallback((
-    response: TranslationResponse,
-    mainLanguage: string
+    response: TranslationResponse
   ) => {
-    // Add transcription to conversation if in main language
-    if (response.transcription && response.audio_language === mainLanguage) {
+    // Always add transcription to conversation (original language)
+    if (response.transcription && response.audio_language) {
       dispatch({
         type: ActionType.ADD_CONVERSATION_ITEM,
         item: {
           text: response.transcription,
           language: response.audio_language,
           speaker: response.audio_language,
-          timestamp: response.timestamp || new Date().toISOString()
+          timestamp: response.timestamp || new Date().toISOString(),
+          type: 'transcription'
         }
       });
     }
     
-    // Add translation to conversation if in main language
-    if (response.translation && response.translation_language === mainLanguage) {
+    // Always add translation to conversation (translated language)
+    if (response.translation && response.translation_language) {
       dispatch({
         type: ActionType.ADD_CONVERSATION_ITEM,
         item: {
           text: response.translation,
           language: response.translation_language,
           speaker: response.audio_language || 'Unknown',
-          timestamp: response.timestamp || new Date().toISOString()
+          timestamp: response.timestamp || new Date().toISOString(),
+          type: 'translation'
         }
       });
     }
@@ -174,7 +175,7 @@ export const useRecording = () => {
       );
       
       // Update conversation
-      processTranslationResponse(response, state.mainLanguage);
+      processTranslationResponse(response);
       
       // Create blob URL for translation audio if available
       if (response.translation_audio && response.translation_audio_mime_type) {

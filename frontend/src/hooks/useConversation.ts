@@ -12,12 +12,14 @@ export const useConversation = () => {
     text: string, 
     language: string, 
     speaker: string,
+    type: 'transcription' | 'translation' = 'transcription',
     timestamp?: string
   ) => {
     const item: ConversationItem = {
       text,
       language,
       speaker,
+      type,
       timestamp: timestamp || new Date().toISOString()
     };
 

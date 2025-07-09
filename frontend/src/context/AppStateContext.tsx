@@ -17,6 +17,7 @@ export interface ConversationItem {
   language: string;
   speaker: string;
   timestamp: string;
+  type: 'transcription' | 'translation'; // Add type to distinguish between transcription and translation
 }
 
 /**
