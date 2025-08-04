@@ -12,73 +12,84 @@ interface TranslationResponse {
 
 export class TranslationService {
   private backendApiUrl: string;
-  private onPlaybackComplete?: () => void;
-  private currentAudio: HTMLAudioElement | null = null;
+  private originalAudioBlob: Blob | null = null; // Store original audio for potential retry
 
   constructor(apiUrl: string = 'http://localhost:8000/process-audio') {
     this.backendApiUrl = apiUrl;
   }
+
+  /**
+   * Send audio for translation with retry logic for trimmed audio
+   * @param audioBlob The audio blob to translate (possibly trimmed)
+   * @param mainLanguage The user's main language
+   * @param otherLanguage The language to translate to/from
+   * @param isPremium Whether the user has premium features
+   * @param isRetry Whether this is a retry with original untrimmed audio
+   * @returns Translation response from the API
+   */
   async sendAudioForTranslation(
     audioBlob: Blob,
     mainLanguage: string,
     otherLanguage: string,
-    isPremium: boolean = false
+    isPremium: boolean = false,
+    isRetry: boolean = false
   ): Promise<TranslationResponse> {
+    // Store original audio on first attempt for potential retry
+    if (!isRetry) {
+      this.originalAudioBlob = audioBlob;
+    }
+
     const formData = new FormData();
     formData.append('file', audioBlob, 'audio.ogg');
     formData.append('main_language', mainLanguage);
     formData.append('other_language', otherLanguage);
     formData.append('is_premium', isPremium.toString());
 
-    const response = await fetch(this.backendApiUrl, {
-      method: 'POST',
-      body: formData,
-    });
+    try {
+      const response = await fetch(this.backendApiUrl, {
+        method: 'POST',
+        body: formData,
+      });
 
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
+      }
+
+      const result = await response.json();
+      return result;
+    } catch (error) {
+      // If this was the first attempt with trimmed audio and we got an error related to audio quality
+      // Retry with the original untrimmed audio
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (!isRetry && 
+          this.originalAudioBlob && 
+          audioBlob !== this.originalAudioBlob &&
+          (errorMessage.includes('audio') || 
+           errorMessage.includes('speech') || 
+           errorMessage.includes('transcription'))) {
+        
+        console.log('Translation failed with trimmed audio. Retrying with original audio...');
+        return this.sendAudioForTranslation(
+          this.originalAudioBlob,
+          mainLanguage,
+          otherLanguage,
+          isPremium,
+          true // mark as retry
+        );
+      }
+      
+      // If we already tried with original audio or error is not related to audio quality, rethrow
+      throw error;
+    } finally {
+      // Clear stored blob if this was a retry or if we're not going to retry
+      if (isRetry) {
+        this.originalAudioBlob = null;
+      }
     }
-
-    return await response.json();
-  }
-
-  playTranslation(audioBlob: Blob, onComplete?: () => void): string {
-    this.onPlaybackComplete = onComplete;
-    const url = this.createAudioUrl(audioBlob);
-
-    if (this.currentAudio) {
-      this.currentAudio.pause();
-      this.revokeAudioUrl(url);
-    }
-
-    this.currentAudio = new Audio(url);
-    this.currentAudio.onended = () => {
-      this.revokeAudioUrl(url);
-      this.onPlaybackComplete?.();
-      this.currentAudio = null;
-    };
-
-    this.currentAudio.play();
-    return url;
-  }
-
-  stop(): void {
-    if (this.currentAudio) {
-      this.currentAudio.pause();
-      this.currentAudio = null;
-    }
-  }
-
+  } 
   b64toBlob(b64Data: string, contentType: string): Blob {
     return b64toBlob(b64Data, contentType);
-  }
-
-  createAudioUrl(audioBlob: Blob): string {
-    return URL.createObjectURL(audioBlob);
-  }
-
-  revokeAudioUrl(url: string): void {
-    URL.revokeObjectURL(url);
   }
 }
 

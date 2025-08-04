@@ -1,15 +1,15 @@
 
-import RealTimeTranslatorApp from './components/RealTimeTranslatorApp';
-import { TranslationProvider } from './context/TranslationContext';
+import { RealTimeTranslatorApp } from './components/RealTimeTranslatorApp';
+import { AppStateProvider } from './context/AppStateContext';
 import './App.css';
 
 function App() {
   return (
-    <TranslationProvider>
+    <AppStateProvider>
       <div className="App">
         <RealTimeTranslatorApp />
       </div>
-    </TranslationProvider>
+    </AppStateProvider>
   );
 }
 

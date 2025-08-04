@@ -1,188 +1,296 @@
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { Button } from './ui/button';
-import { Input } from './ui/input';
-import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
-import { AlertCircle, ArrowLeftRight } from "lucide-react";
-import LanguageSelector from './LanguageSelector';
-import ControlButtons from './ControlButtons';
 import ConversationHistory from './ConversationHistory';
 import { SessionDialog } from './SessionDialog';
 import { TranslationDisplay } from './TranslationDisplay';
-import { useTranslationContext } from '../context/translationContext.utils';
-import { useSession } from '../hooks/useSession';
-import { useAudioRecording } from '../hooks/useAudioRecording';
-import { useSpeechRecognition } from '../hooks/useSpeechRecognition';
-import { languages } from '../constants/languages';
 import AudioVisualizer from './AudioVisualizer';
+import LanguageControls from './LanguageControls';
+import StatusDisplay from './StatusDisplay';
+import RecordingControls from './RecordingControls';
+import { WelcomeMessage } from './WelcomeMessage';
 
-const RealTimeTranslatorApp = () => {  const {
-    targetWord,
-    setTargetWord,
-    mainLanguage,
-    setMainLanguage,
-    otherLanguage,
-    setOtherLanguage,
-    isPremium,
-    setIsPremium,
-    error,
-    status,
-    silenceCountdown,
-    sessionStarted,
-    showEndSessionConfirm,
-    conversation,
-    isListening,
-    isRecording,
-    isPlaying,
-    lastTranslation,
-    lastAudioUrl,
-    recognitionStream,
-    swapLanguages,
-  } = useTranslationContext();
+// Import hooks
+import { useSession } from '../hooks/useSession';
+import { useLanguage } from '../hooks/useLanguage';
+import { useRecording } from '../hooks/useRecording';
+import { useConversation } from '../hooks/useConversation';
+import { SessionState, OperationState } from '../context/AppStateContext';
+import { useAppState } from '../hooks/useAppState';
 
-  const { startSession, handleStopSession, cancelEndSession, confirmEndSession } = useSession();
-  const { startRecording: handleManualRecord, stopRecording: handleManualTranslate } = useAudioRecording();
-  const { startListening, stopListening } = useSpeechRecognition();
+export const RealTimeTranslatorApp = () => {
+  // Use our hooks
+  const session = useSession();
+  const language = useLanguage();
+  const recording = useRecording();
+  const conversation = useConversation();
+  const { state } = useAppState();
 
-  const conversationEndRef = useRef<HTMLDivElement>(null) as React.RefObject<HTMLDivElement>;
-
-  // Start listening when session starts
+  // State for temporary assistant (direct LLM) response
+  const [assistantResponse, setAssistantResponse] = useState<string | null>(null);
+  
+  // Add welcome message state
+  const [showWelcome, setShowWelcome] = useState(false);
+  
+  // Debug session state changes
   useEffect(() => {
-    if (sessionStarted) {
-      startListening();
+    console.log('Session state changed:', state.sessionState);
+    console.log('Operation state changed:', state.operationState);
+  }, [state.sessionState, state.operationState]);
+
+  // Listen for new assistant (direct LLM) responses in state
+  useEffect(() => {
+    // If lastAudioAnalysis is present and intent is 'assistant_query', show assistant response
+    const analysis = state.lastAudioAnalysis;
+    if (analysis && analysis.intent === 'assistant_query') {
+      // Prefer expert_response.answer, fallback to direct_response
+      const answer = analysis.expert_response?.answer || analysis.direct_response || '';
+      setAssistantResponse(answer);
+    } else {
+      setAssistantResponse(null);
     }
-  }, [sessionStarted, startListening]);
-
-  // Cleanup listening when session ends
+  }, [state.lastAudioAnalysis]);
+  // Clear assistant response when user continues conversation (e.g., new recording/translation)
   useEffect(() => {
-    return () => {
-      if (!sessionStarted) {
-        stopListening();
-      }
-    };
-  }, [sessionStarted, stopListening]);
+    if (state.lastAudioAnalysis && state.lastAudioAnalysis.intent === 'translation') {
+      setAssistantResponse(null);
+    }
+  }, [state.lastAudioAnalysis]);
+  
+  const conversationEndRef = useRef<HTMLDivElement>(null);
 
   // Keep conversation scrolled to bottom
   useEffect(() => {
-    conversationEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [conversation]);
+    if (conversationEndRef.current) {
+      conversationEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [conversation.conversation]);
+  // Simplified session and UI control functions
+  
+  const startSessionWithCountdown = () => {
+    // Show welcome message first
+    setShowWelcome(true);
+  };
+  
+  // Called when welcome message is complete
+  const handleWelcomeComplete = () => {
+    console.log('Welcome message complete, starting session and recording');
+    setShowWelcome(false);
+    
+    // Start the actual session
+    session.startSession();
+    
+    // Add a small delay before starting recording to ensure state transitions properly
+    setTimeout(() => {
+      console.log('Starting recording after session initialization, current session state:', state.sessionState);
+      if (state.sessionState === SessionState.ACTIVE) { // Only start recording if session is active
+        recording.startRecording();
+      } else {
+        console.warn('Session state is not ACTIVE after welcome message completion, current state:', state.sessionState);
+        // Try to recover by forcing the session state to ACTIVE
+        console.log('Attempting to recover by starting session again...');
+        session.startSession();
+        setTimeout(() => {
+          console.log('Recovery attempt - session state:', state.sessionState);
+          recording.startRecording();
+        }, 200);
+      }
+    }, 300); // Increase the delay to ensure state is updated
+  };
+  
+  // Called when user skips the welcome message
+  const handleWelcomeSkip = () => {
+    console.log('Welcome message skipped, starting session and recording');
+    setShowWelcome(false);
+    
+    // Start the actual session
+    session.startSession();
+    
+    // Add a small delay before starting recording to ensure state transitions properly
+    setTimeout(() => {
+      console.log('Starting recording after session initialization (skipped), current session state:', state.sessionState);
+      if (state.sessionState === SessionState.ACTIVE) { // Only start recording if session is active
+        recording.startRecording();
+      } else {
+        console.warn('Session state is not ACTIVE after skipping welcome message, current state:', state.sessionState);
+        // Try to recover by forcing the session state to ACTIVE
+        console.log('Attempting to recover by starting session again...');
+        session.startSession();
+        setTimeout(() => {
+          console.log('Recovery attempt - session state:', state.sessionState);
+          recording.startRecording();
+        }, 200);
+      }
+    }, 300); // Increase the delay to ensure state is updated
+  };
 
-  // Button visibility logic
-  const showStartSession = !sessionStarted;
-  const showMainUI = sessionStarted;
-  const showStopSession = sessionStarted;
-  const showRecord = showMainUI && isListening && !isRecording && !isPlaying;
-  const showTranslate = showMainUI && isRecording && !isPlaying;
-  // Show visualizer only when listening, not recording or playing
-  const showVisualizer = isListening && !isRecording && !isPlaying && !!recognitionStream;
+  // Clear/Restart logic with cleaner implementation
+  const handleClearRestart = () => {
+    recording.resetRecording(); // Uses default callbacks from the hook
+  };
+
+  // Handle manual translation
+  const handleManualTranslate = async () => {
+    await recording.stopRecordingAndTranslate();
+  };
+  // Organized UI state for easier maintenance
+  const viewState = {
+    session: {
+      showStartButton: (state.sessionState === SessionState.IDLE || state.sessionState === SessionState.ENDED) && state.operationState !== OperationState.PREPARING,
+      showStopButton: state.sessionState === SessionState.ACTIVE || state.sessionState === SessionState.PAUSED,
+      showConfirmDialog: state.sessionState === SessionState.ENDING_CONFIRMATION,
+      showCountdown: state.operationState === OperationState.PREPARING,
+      showMainUI: state.sessionState === SessionState.ACTIVE || state.sessionState === SessionState.PAUSED
+    },
+    recording: {
+      showPauseButton: state.operationState === OperationState.RECORDING && state.sessionState === SessionState.ACTIVE,
+      showUnpauseButton: state.sessionState === SessionState.PAUSED,
+      showResumeButton: state.sessionState === SessionState.ACTIVE &&
+                      state.operationState === OperationState.IDLE &&
+                      !!state.sessionId,
+      showResumeFromPause: state.sessionState === SessionState.PAUSED,
+      showRestartButton: state.operationState === OperationState.RECORDING && state.sessionState === SessionState.ACTIVE,
+      showVisualizer: state.operationState === OperationState.RECORDING &&
+                     state.sessionState === SessionState.ACTIVE &&
+                     !!state.analyserNode
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-start p-4">
       <h1 className="text-3xl font-bold mb-6 text-gray-800">A3I Translator</h1>
 
-      {showMainUI && (
-        <ConversationHistory
-          conversation={conversation}
-          mainLanguage={mainLanguage}
-          conversationEndRef={conversationEndRef}
+      {/* Welcome message component */}
+      {showWelcome && (
+        <WelcomeMessage
+          mainLanguage={language.mainLanguage}
+          targetLanguage={language.otherLanguage}
+          isPremium={state.isPremium}
+          onComplete={handleWelcomeComplete}
+          onSkip={handleWelcomeSkip}
         />
       )}
 
-      {showEndSessionConfirm ? (
-        <SessionDialog onCancel={cancelEndSession} onConfirm={confirmEndSession} />
-      ) : (
+      {/* Show conversation history only when session is active */}
+      {viewState.session.showMainUI && (
         <>
-          {showStopSession && (
+          {/* Show assistant (direct LLM) response if present */}
+          {assistantResponse && (
+            <div className="mb-4 w-full max-w-xl p-4 bg-yellow-50 border-l-4 border-yellow-400 text-yellow-900 rounded shadow">
+              <div className="font-semibold mb-1">Assistant Response</div>
+              <div>{assistantResponse}</div>
+            </div>
+          )}
+          <ConversationHistory
+            conversation={conversation.conversation}
+            mainLanguage={language.mainLanguage}
+            conversationEndRef={conversationEndRef}
+          />
+        </>
+      )}
+      {viewState.session.showConfirmDialog ? (
+        <SessionDialog onCancel={session.cancelEndConfirmation} onConfirm={session.confirmEndSession} />
+      ) : !showWelcome && (
+        <>
+          {/* Show Stop Session button when session is active */}
+          {viewState.session.showStopButton && (
             <div className="w-full flex justify-end mb-2">
-              <Button onClick={handleStopSession} variant="destructive" size="sm">
+              <Button onClick={session.showEndConfirmation} variant="destructive" size="sm">
                 Stop Session
               </Button>
             </div>
-          )}          <div className="flex flex-col md:flex-row gap-4 mb-6 items-center">
-            <LanguageSelector
-              label="Main Language:"
-              value={mainLanguage}
-              onChange={setMainLanguage}
-              options={languages.map(l => ({ value: l.value, label: l.name }))}
-            />
-            <Button 
-              onClick={swapLanguages}
-              variant="outline"
-              size="icon"
-              className="rounded-full h-10 w-10 flex-shrink-0 mt-6"
-              title="Swap languages"
-            >
-              <ArrowLeftRight className="h-5 w-5" />
-            </Button>
-            <LanguageSelector
-              label="Target Language:"
-              value={otherLanguage}
-              onChange={setOtherLanguage}
-              options={languages.map(l => ({ value: l.value, label: l.name }))}
-            />
-            <div className="flex items-center mt-3 md:mt-6">
-              <div className="flex items-center space-x-2">
-                <input
-                  type="checkbox"
-                  id="premium-checkbox"
-                  checked={isPremium}
-                  onChange={(e) => setIsPremium(e.target.checked)}
-                  className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                />
-                <label htmlFor="premium-checkbox" className="text-sm font-medium text-gray-700 dark:text-gray-200">
-                  Premium
-                </label>
-              </div>
-            </div>
-          </div>
+          )}
 
-          {showStartSession && (
+          {/* Resume Session button (when active but not recording) */}
+          {viewState.recording.showResumeButton && (
+            <div className="w-full flex justify-end mb-2">
+              <Button
+                onClick={recording.resumeSessionRecording}
+                variant="default"
+                size="sm"
+                title="Resume recording after browser restart or interruption"
+              >
+                Resume Recording
+              </Button>
+            </div>
+          )}
+
+          {/* Unpause button when session is paused */}
+          {viewState.recording.showResumeFromPause && (
+            <div className="w-full flex justify-end mb-2">
+              <Button
+                onClick={recording.resumeRecording}
+                variant="default"
+                size="sm"
+                title="Continue recording after being paused"
+              >
+                Unpause Recording
+              </Button>
+            </div>
+          )}
+
+          {/* Language selection controls - always visible */}
+          <LanguageControls
+            mainLanguage={language.mainLanguage}
+            setMainLanguage={language.setMainLanguage}
+            otherLanguage={language.otherLanguage}
+            setOtherLanguage={language.setOtherLanguage}
+            isPremium={language.isPremium}
+            setPremium={language.setPremium}
+            swapLanguages={language.swapLanguages}
+          />
+
+          {/* Start Session button - only shown on landing page */}
+          {viewState.session.showStartButton && (
             <div className="mb-4">
-              <Button type="button" onClick={startSession} size="lg">
+              <Button
+                type="button"
+                onClick={startSessionWithCountdown}
+                size="lg"
+                className="px-8 py-6 text-lg"
+              >
                 Start Session
               </Button>
             </div>
           )}
 
-          {showMainUI && (
+          {/* Only show the following elements when session is active */}
+          {viewState.session.showMainUI && (
             <>
-              <Input
-                type="text"
-                value={targetWord}
-                onChange={(e) => setTargetWord(e.target.value)}
-                placeholder="Enter trigger word..."
-                className="mb-4 max-w-sm"
+              {/* Status display showing errors or current status */}
+              <StatusDisplay
+                status={state.statusMessage}
+                silenceCountdown={state.silenceCountdown}
+                error={state.error}
               />
 
-              {error && (
-                <Alert variant="destructive" className="mb-4">
-                  <AlertCircle className="h-4 w-4" />
-                  <AlertTitle>Error</AlertTitle>
-                  <AlertDescription>{error}</AlertDescription>
-                </Alert>
+              {/* Recording control buttons */}
+              <RecordingControls
+                showPause={viewState.recording.showPauseButton}
+                showUnpause={viewState.recording.showUnpauseButton}
+                showClearRestart={viewState.recording.showRestartButton}
+                isRecording={state.operationState === OperationState.RECORDING}
+                isPaused={state.sessionState === SessionState.PAUSED}
+                handlePause={recording.pauseRecording}
+                handleUnpause={recording.resumeRecording}
+                handleClearRestart={handleClearRestart}
+                handleManualTranslate={handleManualTranslate}
+              />
+
+              {/* Audio visualizer */}
+              {viewState.recording.showVisualizer && (
+                <AudioVisualizer
+                  stream={null}
+                  isVisible={true}
+                  analyserNode={state.analyserNode}
+                />
               )}
 
-              {status && (
-                <div className="text-gray-600 mb-4">
-                  {status}
-                  {silenceCountdown !== null && ` (${silenceCountdown})`}
-                </div>
-              )}              
-              <ControlButtons
-                showRecord={showRecord}
-                showTranslate={showTranslate}
-                onRecord={handleManualRecord}
-                onTranslate={handleManualTranslate}
+              {/* Translation display */}
+              <TranslationDisplay
+                audioUrl={state.lastAudioUrl}
+                translation={state.lastTranslation}
+                isPlaying={state.operationState === OperationState.PLAYING}
               />
-
-              <TranslationDisplay 
-                audioUrl={lastAudioUrl}
-                translation={lastTranslation}
-                isPlaying={isPlaying}
-              />
-
-              {showVisualizer && (
-                <AudioVisualizer stream={recognitionStream} isVisible={showVisualizer} />
-              )}
             </>
           )}
         </>

@@ -1,58 +1,100 @@
-import { useCallback, useRef, useEffect } from 'react';
-import { useTranslationContext } from '../context/translationContext.utils';
+import { useCallback, useEffect, useMemo } from 'react';
+import { ActionType, SessionState } from '../context/AppStateContext';
+import { useAppState } from './useAppState';
 import { SessionService } from '../services/SessionService';
 
+/**
+ * Hook for managing application session lifecycle using the central app state
+ * @returns Session state and actions
+ */
 export const useSession = () => {
-  const {
-    setSessionStarted,
-    setSessionId,
-    setIsListening,
-    setStatus,
-    setShowEndSessionConfirm,
-    cleanup,
-  } = useTranslationContext();
+  const { state, dispatch } = useAppState();
+  const sessionService = useMemo(() => new SessionService(), []);
 
-  const sessionServiceRef = useRef<SessionService>(new SessionService());
+  // Actions
+  const startSession = useCallback(() => {
+    const id = sessionService.generateSessionId();
+    const expiry = Date.now() + sessionService.getSessionDuration();
+    
+    // Save session to local storage with additional data
+    sessionService.saveSession(id, {
+      mainLanguage: state.mainLanguage,
+      otherLanguage: state.otherLanguage,
+      isPremium: state.isPremium,
+      sessionState: SessionState.ACTIVE
+    });
+    
+    // Update state
+    dispatch({
+      type: ActionType.START_SESSION,
+      id,
+      expiry
+    });
+  }, [dispatch, sessionService, state.mainLanguage, state.otherLanguage, state.isPremium]);
 
-  const startSession = useCallback((e?: React.MouseEvent) => {
-    e?.preventDefault();
-    const id = sessionServiceRef.current.generateSessionId();
-    sessionServiceRef.current.saveSession(id);
-    setSessionId(id);
-    setSessionStarted(true);
-    setIsListening(true); // Start listening immediately when session starts
-    setStatus('Listening for trigger word...');
-  }, [setSessionId, setSessionStarted, setIsListening, setStatus]);
+  const endSession = useCallback(() => {
+    // Clear session data
+    sessionService.clearSession();
+    
+    // Update state
+    dispatch({ type: ActionType.CONFIRM_END_SESSION });
+  }, [dispatch, sessionService]);
+
+  const showEndConfirmation = useCallback(() => {
+    dispatch({ type: ActionType.REQUEST_END_SESSION });
+  }, [dispatch]);
+
+  const cancelEndConfirmation = useCallback(() => {
+    dispatch({ type: ActionType.CANCEL_END_SESSION });
+  }, [dispatch]);
 
   const confirmEndSession = useCallback(() => {
-    setSessionStarted(false);
-    setSessionId(null);
-    sessionServiceRef.current.clearSession();
-    setShowEndSessionConfirm(false);
-    cleanup(); // Call the cleanup function to reset all state and release resources
-  }, [cleanup, setSessionId, setSessionStarted, setShowEndSessionConfirm]);
-
-  const handleStopSession = useCallback(() => {
-    setShowEndSessionConfirm(true);
-  }, [setShowEndSessionConfirm]);
-
-  const cancelEndSession = useCallback(() => {
-    setShowEndSessionConfirm(false);
-  }, [setShowEndSessionConfirm]);
-
-  // Restore session on mount
+    endSession();
+  }, [endSession]);
+    // Restore session on mount
   useEffect(() => {
-    const session = sessionServiceRef.current.loadSession();
-    if (session && sessionServiceRef.current.isValidSession(session)) {
-      setSessionId(session.id);
-      setSessionStarted(true);
+    const session = sessionService.loadSession();
+    if (session && sessionService.isValidSession(session)) {
+      console.log('Restoring session from localStorage:', session);
+      
+      // Restore the session with all saved data
+      dispatch({
+        type: ActionType.RESTORE_SESSION,
+        id: session.id,
+        expiry: session.expiry,
+        conversation: [],
+        mainLanguage: (session.mainLanguage as string) || state.mainLanguage,
+        otherLanguage: (session.otherLanguage as string) || state.otherLanguage,
+        isPremium: (session.isPremium as boolean) || state.isPremium,
+        sessionState: session.sessionState as SessionState || SessionState.ACTIVE
+      });
     }
-  }, [setSessionId, setSessionStarted]);
-
+  }, [dispatch, sessionService, state.mainLanguage, state.otherLanguage, state.isPremium]); // Set up periodic session validation check
+  useEffect(() => {
+    if (state.sessionState !== SessionState.ACTIVE) return;
+    
+    // Check session validity every minute
+    const validityTimer = setInterval(() => {
+      const session = sessionService.loadSession();
+      if (!session || !sessionService.isValidSession(session)) {
+        endSession();
+      }
+    }, 60000);
+    
+    return () => clearInterval(validityTimer);
+  }, [state.sessionState, endSession, sessionService]); 
   return {
+    // State
+    sessionStarted: state.sessionState === SessionState.ACTIVE,
+    sessionId: state.sessionId,
+    sessionExpiry: state.sessionExpiry,
+    showEndSessionConfirm: state.sessionState === SessionState.ENDING_CONFIRMATION,
+    
+    // Actions
     startSession,
-    confirmEndSession,
-    handleStopSession,
-    cancelEndSession,
+    endSession,
+    showEndConfirmation,
+    cancelEndConfirmation,
+    confirmEndSession
   };
 };
