@@ -1,5 +1,7 @@
 import { useCallback } from 'react';
-import { useAppState, ActionType } from '../context/AppStateContext';
+import { ActionType } from '../context/AppStateContext';
+import { useAppState } from './useAppState';
+
 
 /**
  * Hook for managing language settings in the application

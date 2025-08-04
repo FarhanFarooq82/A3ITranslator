@@ -28,11 +28,23 @@ export interface AppState {
   // Audio visualization
   analyserNode: AnalyserNode | null;
     // Conversation history
-  conversation: Array<{ text: string; language: string; speaker: string; timestamp: string; }>;
+  conversation: Array<{ text: string; language: string; speaker: string; timestamp: string; type: 'transcription' | 'translation'; }>;
   
   // Session info
   sessionId: string | null; 
   sessionExpiry: number | null;
+  
+  // Backend storage state
+  isConversationSyncing?: boolean;
+  lastSyncTime?: number;
+  backendSyncError?: string;
+  conversationSummary?: any; // ConversationSummary type will be imported from context
+  
+  // AI Assistant state
+  assistantResponse?: string;
+  assistantAudioUrl?: string;
+  isProcessingAssistantQuery?: boolean;
+  lastAudioAnalysis?: any; // ComprehensiveAudioResult type will be imported from context
 }
 
 /**

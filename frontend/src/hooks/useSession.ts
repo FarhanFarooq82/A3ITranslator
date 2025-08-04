@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo } from 'react';
-import { useAppState, ActionType, SessionState } from '../context/AppStateContext';
+import { ActionType, SessionState } from '../context/AppStateContext';
+import { useAppState } from './useAppState';
 import { SessionService } from '../services/SessionService';
 
 /**

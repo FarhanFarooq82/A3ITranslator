@@ -14,7 +14,8 @@ import { useSession } from '../hooks/useSession';
 import { useLanguage } from '../hooks/useLanguage';
 import { useRecording } from '../hooks/useRecording';
 import { useConversation } from '../hooks/useConversation';
-import { useAppState, SessionState, OperationState } from '../context/AppStateContext';
+import { SessionState, OperationState } from '../context/AppStateContext';
+import { useAppState } from '../hooks/useAppState';
 
 export const RealTimeTranslatorApp = () => {
   // Use our hooks
@@ -23,6 +24,9 @@ export const RealTimeTranslatorApp = () => {
   const recording = useRecording();
   const conversation = useConversation();
   const { state } = useAppState();
+
+  // State for temporary assistant (direct LLM) response
+  const [assistantResponse, setAssistantResponse] = useState<string | null>(null);
   
   // Add welcome message state
   const [showWelcome, setShowWelcome] = useState(false);
@@ -32,6 +36,25 @@ export const RealTimeTranslatorApp = () => {
     console.log('Session state changed:', state.sessionState);
     console.log('Operation state changed:', state.operationState);
   }, [state.sessionState, state.operationState]);
+
+  // Listen for new assistant (direct LLM) responses in state
+  useEffect(() => {
+    // If lastAudioAnalysis is present and intent is 'assistant_query', show assistant response
+    const analysis = state.lastAudioAnalysis;
+    if (analysis && analysis.intent === 'assistant_query') {
+      // Prefer expert_response.answer, fallback to direct_response
+      const answer = analysis.expert_response?.answer || analysis.direct_response || '';
+      setAssistantResponse(answer);
+    } else {
+      setAssistantResponse(null);
+    }
+  }, [state.lastAudioAnalysis]);
+  // Clear assistant response when user continues conversation (e.g., new recording/translation)
+  useEffect(() => {
+    if (state.lastAudioAnalysis && state.lastAudioAnalysis.intent === 'translation') {
+      setAssistantResponse(null);
+    }
+  }, [state.lastAudioAnalysis]);
   
   const conversationEndRef = useRef<HTMLDivElement>(null);
 
@@ -149,11 +172,20 @@ export const RealTimeTranslatorApp = () => {
 
       {/* Show conversation history only when session is active */}
       {viewState.session.showMainUI && (
-        <ConversationHistory
-          conversation={conversation.conversation}
-          mainLanguage={language.mainLanguage}
-          conversationEndRef={conversationEndRef}
-        />
+        <>
+          {/* Show assistant (direct LLM) response if present */}
+          {assistantResponse && (
+            <div className="mb-4 w-full max-w-xl p-4 bg-yellow-50 border-l-4 border-yellow-400 text-yellow-900 rounded shadow">
+              <div className="font-semibold mb-1">Assistant Response</div>
+              <div>{assistantResponse}</div>
+            </div>
+          )}
+          <ConversationHistory
+            conversation={conversation.conversation}
+            mainLanguage={language.mainLanguage}
+            conversationEndRef={conversationEndRef}
+          />
+        </>
       )}
       {viewState.session.showConfirmDialog ? (
         <SessionDialog onCancel={session.cancelEndConfirmation} onConfirm={session.confirmEndSession} />
