@@ -9,6 +9,7 @@ import os
 import uuid
 import sqlite3
 import re
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from functools import lru_cache
@@ -22,11 +23,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 from google.cloud import texttospeech_v1beta1 as texttospeech
+from contextlib import asynccontextmanager
 
 # --- Project Imports ---
 from .models.conversation import ConversationItem, ConversationSummary, BackendContext, ComprehensiveAudioResult, SyncConversationRequest
 from .db.conversation_db import init_conversation_db, get_conversation_from_db, save_conversation_to_db
-from .services.ai_assistant import analyze_conversation_intent, generate_conversation_summary
+from .services.in_memory_session_service import in_memory_sessions
+from .services.azure_speech_language_service import AzureSpeechLanguageService
 from .services.gemini_service import (
     get_gemini_client, 
     generate_gemini_content, 
@@ -51,8 +54,58 @@ logger.info(f"Environment variable GOOGLE_API_KEY exists: {'GOOGLE_API_KEY' in o
 logger.info(f"Environment variable PLAYAI_KEY exists: {'PLAYAI_KEY' in os.environ}")
 logger.info(f"Environment variable PLAYAI_USER_ID exists: {'PLAYAI_USER_ID' in os.environ}")
 
+# --- Global Service Instances ---
+azure_speech_service: Optional[AzureSpeechLanguageService] = None
+
+# --- FastAPI Lifespan Event ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """FastAPI lifespan event to initialize Azure datasets on startup"""
+    global azure_speech_service
+    
+    logger.info("=== FastAPI Startup: Initializing Azure Speech Language Service ===")
+    
+    try:
+        # Check if Azure credentials are available before attempting initialization
+        azure_key = os.environ.get("AZURE_SPEECH_KEY", "")
+        azure_region = os.environ.get("AZURE_SPEECH_REGION", "")
+        
+        if not azure_key or not azure_region:
+            logger.warning("⚠️ Azure Speech credentials not available, skipping Azure initialization")
+            logger.info("💡 Will use fallback language data for MVP")
+        else:
+            # Initialize the Azure Speech Language Service
+            azure_speech_service = AzureSpeechLanguageService()
+            
+            # Load datasets from Azure on startup
+            await azure_speech_service.initialize_datasets_on_startup()
+            
+            # Log initialization success with stats
+            stats = azure_speech_service.get_dataset_stats()
+            logger.info(f"✅ Azure Speech datasets initialized successfully!")
+            logger.info(f"📊 Loaded {stats['languages_count']} languages, {stats['voices_count']} voices")
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize Azure Speech datasets: {e}", exc_info=True)
+        # Continue startup even if Azure initialization fails (fallback data will be used)
+        if azure_speech_service:
+            logger.info("💡 Using fallback language data for MVP")
+        else:
+            logger.warning("⚠️ Azure service not initialized, using minimal fallback")
+    
+    logger.info("=== FastAPI Startup Complete ===")
+    
+    try:
+        # Yield control to FastAPI (app runs here)
+        yield
+    except Exception as e:
+        logger.error(f"Error during application lifespan: {e}", exc_info=True)
+    finally:
+        # Cleanup (if needed)
+        logger.info("=== FastAPI Shutdown ===")
+
 # --- FastAPI App Setup ---
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -76,12 +129,12 @@ ENABLE_MODEL_FALLBACK = os.environ.get("ENABLE_MODEL_FALLBACK", "true").lower() 
 google_api_key = os.environ.get("GOOGLE_API_KEY")
 if not google_api_key:
     logger.error("GOOGLE_API_KEY environment variable not set - Gemini functionality will not work")
-    raise ValueError("Google API key missing - please set GOOGLE_API_KEY in .env file")
+    # Don't raise error, let app start but with limited functionality
 
 AZURE_SPEECH_KEY = os.environ.get("AZURE_SPEECH_KEY", "")
 if not AZURE_SPEECH_KEY:
-    logger.error("AZURE_SPEECH_KEY environment variable not set or empty in .env file")
-    raise ValueError("Azure Speech API key missing - TTS functionality will not work correctly")
+    logger.warning("AZURE_SPEECH_KEY environment variable not set or empty in .env file")
+    logger.info("TTS functionality will use fallback options")
 else:
     logger.info(f"AZURE_SPEECH_KEY successfully loaded from .env file: {AZURE_SPEECH_KEY[:5]}... (hidden)")
 
@@ -103,55 +156,176 @@ except Exception as e:
 
 # --- System Prompt ---
 
-# Your System Prompt for Gemini (preserving the original from old main.py)
-SYSTEM_PROMPT = """ask: Process audio input.
+# Comprehensive System Prompt with all advanced features
+ENHANCED_SYSTEM_PROMPT = """Task: Process audio input with comprehensive analysis including script enforcement, fact management, speaker identification, and AI assistance.
 
 Languages:
 - Accept an array of two BCP-47 language codes from the user (e.g. ["ur-PK", "en-US"]).
 - One is the main language (preferred translation target), the other is the secondary source or alternative language.
 
-Instructions:
-1. Detect the spoken language from audio. Must match one of the user-provided codes.
-   - If ambiguity arises between similar languages (e.g., Hindi and Urdu), prioritize based on native script characteristics (e.g., Nastaliq for Urdu, Devanagari for Hindi).
-   - If no clear match is found, treat user's main language as target and detected language as source.
+CRITICAL SCRIPT RULES:
+- ABSOLUTELY NEVER use romanized text for native script languages
+- Urdu: MUST use Arabic/Nastaliq script (اردو), NEVER Latin characters
+- Hindi: MUST use Devanagari script (हिन्दी), NEVER Latin characters  
+- Arabic: MUST use Arabic script (العربية), NEVER Latin characters
+- Bengali: MUST use Bengali script (বাংলা), NEVER Latin characters
+- Persian: MUST use Persian script (فارسی), NEVER Latin characters
+- If a language has a native script, it MUST be used exclusively
 
-2. Transcribe the audio using the **native script** of the detected language.  
-   - Do not use romanized transcription.
-   - Retain foreign or borrowed words that are contextually appropriate.
+SESSION CONTEXT AND FACTS: {session_context}
 
-3. Detect if the speaker directly addresses the LLM in the audio using trigger phrases, in english or any of the user provided languages, such as:
-   - "hey translator"
-   - "ok translator"
-   - "dear translator"
-   - "translator, can you..."
+CRITICAL: Use the above context and facts for ALL processing steps below!
 
-   If present:
-   - Interpret as a direct query to the LLM.
-   - Respond naturally to the query using the **same language** as spoken.
-   - Skip translation and SSML enhancement steps.
+Processing Instructions:
 
-4. If it is not a direct query:
-   - Translate the audio transcription into the other user-provided language using simple vocabulary.
-   - Match the speaker's gender and tone with correct pronoun usage.
-   - Detect emotional tone (e.g., happy, sad, angry, playful).
-   - Enhance the translated output with SSML elements **only within the sentence content**, without wrapping it in `<voice>` or `<speak>` tags.
-   - Include SSML features like `<prosody>` and `<break>` for pacing, pitch, rate, and volume.
-   - Add nonverbal vocal expressions (e.g., `[laughter]`, `[sigh]`, `[cough]`) only if they are present and contextually meaningful.
+1. AUDIO PROCESSING & TRANSCRIPTION:
+   - Detect spoken language from audio (must match one of user-provided codes)
+   - **USE CONTEXT**: Check session facts for names, places, technical terms that might appear in audio
+   - **USE CONVERSATION HISTORY**: Reference recent messages to understand context and resolve ambiguous words
+   - Transcribe using ONLY native script for native script languages
+   - **CONTEXT RESOLUTION**: If unclear audio contains pronouns or references, use session facts to identify what they refer to
+   - If ambiguity arises between similar languages, prioritize based on script characteristics
+   - VERIFY: Script authenticity before finalizing transcription
+
+2. SPEAKER IDENTIFICATION:
+   - Analyze voice characteristics: gender, age range, accent patterns, language
+   - **MANDATORY**: Search through ALL session facts to find matching speaker profiles
+   - **USE PREVIOUS SPEAKER DATA**: Compare voice characteristics against known speakers from facts
+   - **CROSS-REFERENCE**: Match voice patterns, language preferences, and speaking styles from session history
+   - If facts suggest specific person characteristics, use for identification
+   - **FACT-BASED IDENTIFICATION**: Use names, relationships, age info from facts to identify speaker
+   - Determine if this is a new speaker or known person from session
+   - Include the detected language for complete speaker profile
+
+3. DIRECT QUERY DETECTION:
+   - Check for trigger phrases in any supported language:
+     * "hey translator" / "ok translator" / "dear translator"
+     * "translator, can you..." / equivalent in other languages
+   - If direct query detected:
+     * **USE SESSION FACTS**: Search provided facts database for relevant information to answer query
+     * **PERSONALIZED RESPONSE**: Use known names, preferences, relationships from facts
+     * **CONTEXT-AWARE**: Reference previous conversations and established facts
+     * Generate helpful response in same language as spoken
+     * ALSO translate the AI response to the other language
+     * **FACT INTEGRATION**: Include relevant personal details and conversation history in response
+
+4. TRANSLATION PROCESS (if not direct query):
+   - **CONTEXT-DRIVEN TRANSLATION**: Use session facts to resolve pronouns (he/she/it/they → specific names)
+   - **RELATIONSHIP AWARENESS**: Use family/relationship facts to choose appropriate terms (mama/papa vs mom/dad)
+   - **CULTURAL CONTEXT**: Apply personal preferences and cultural background from facts
+   - Translate to target language using simple vocabulary
+   - **PRONOUN RESOLUTION**: Replace ambiguous pronouns with specific names from session facts
+   - Match speaker's gender and tone with correct pronoun usage
+   - **HISTORICAL CONTEXT**: Reference previous conversation topics and established context
+   - Detect emotional tone and context
+   - Enhance with SSML (without <voice> or <speak> wrapper tags)
+   - Add contextual nonverbal expressions if present
+
+5. COMPREHENSIVE FACT MANAGEMENT:
+   
+   A. FACT EXTRACTION:
+   - Extract ALL factual information from transcription
+   - **USE EXISTING CONTEXT**: Cross-reference against current session facts to avoid duplicates
+   - Identify: names, relationships, ages, locations, preferences, events, dates
+   - **CONTEXT ENHANCEMENT**: Use conversation history to add context to extracted facts
+   - Categorize by person (if multiple people mentioned)
+   - **CONVERSATION ANALYSIS**: Use session context to determine conversation purpose: CHILD_FOCUSED, ISSUE_FOCUSED, PERSON_FOCUSED, TOPIC_FOCUSED
+   
+   B. FACT VERIFICATION & ENHANCEMENT:
+   - **MANDATORY COMPARISON**: Compare EVERY new fact against existing session facts database
+   - **SEARCH EXISTING FACTS**: Use fact search to find related or similar information
+   - ENDORSE: If new fact confirms existing fact, increase confidence
+   - CORRECT: If new fact contradicts existing fact, update with correction
+   - DEDUPLICATE: Merge similar facts, keep highest confidence version
+   - **CONTEXT VALIDATION**: Use conversation history to validate fact accuracy
+   - NEW: Add completely new facts to knowledge base only if not found in existing facts
+   
+   C. FACT ORGANIZATION:
+   - Group facts by person/entity using existing session context for accurate grouping
+   - **RELATIONSHIP MAPPING**: Use existing relationship facts to connect new information
+   - Maintain confidence scores (0.1-1.0) based on context consistency
+   - Track endorsement counts from repeated mentions across conversation history
+   - Store in English for consistency
+   - **CONTEXT METADATA**: Include source metadata (when extracted, from which conversation, related context)
+
+6. SCRIPT VALIDATION:
+   - Final verification that all output uses correct native scripts
+   - No romanized text for languages with native writing systems
+
+CONTEXT USAGE VERIFICATION:
+Before generating output, verify that you have:
+- ✅ Used session facts for speaker identification
+- ✅ Applied conversation history for transcription accuracy
+- ✅ Leveraged existing facts for pronoun resolution in translation
+- ✅ Referenced personal relationships and preferences from facts
+- ✅ Cross-checked new facts against existing fact database
+- ✅ Used context to enhance AI assistant responses (if direct query)
 
 Output format (JSON):
 
-{
-  "timestamp": "current_time",
-  "gender": "MALE | FEMALE | NEUTRAL",
-  "audio_language": "detected_language_BCP_47_code",
-  "transcription": "native_script_text",
-  "translation_language": "target_language_BCP_47_code",
-  "translation": "translated_text (omit if direct query)",
-  "tone": "dominant_emotion",
-  "Translation_with_gestures": "SSML-enhanced sentence only (without <voice> or <speak> tags)",
+{{
+  "timestamp": "current_time_ISO",
+  "audio_language": "detected_language_BCP_47",
+  "transcription": "native_script_transcription_VERIFIED",
+  "translation_language": "target_language_BCP_47",
+  "translation": "translated_text_native_script",
+  "tone": "emotional_tone",
+  "Translation_with_gestures": "SSML_enhanced_translation (without wrapper tags)",
+  
+  "speaker_analysis": {{
+    "gender": "MALE | FEMALE | NEUTRAL",
+    "language": "detected_speaker_language_BCP_47",
+    "estimated_age_range": "child | teen | young_adult | adult | senior",
+    "is_known_speaker": true | false,
+    "speaker_identity": "name_if_identified_from_facts",
+    "confidence": 0.0-1.0
+  }},
+  
   "is_direct_query": true | false,
-  "direct_response": "response_in_same_language (only if is_direct_query is true)"
-}"""
+  
+  "ai_response": {{
+    "answer_in_audio_language": "AI response in same language as audio (if direct query)",
+    "answer_translated": "AI response translated to other language (if direct query)", 
+    "answer_with_gestures": "SSML enhanced AI response in audio language (if direct query)",
+    "confidence": 0.0-1.0,
+    "expertise_area": "general | personal | technical | educational"
+  }},
+  
+  "fact_management": {{
+    "extracted_facts": [
+      {{
+        "fact_id": "unique_identifier",
+        "person": "person_name_or_speaker",
+        "category": "personal | relationship | preference | event | location | other",
+        "fact_text": "factual_statement_in_English",
+        "confidence": 0.0-1.0,
+        "source": "current_transcription",
+        "timestamp": "extraction_time"
+      }}
+    ],
+    "fact_operations": [
+      {{
+        "operation": "NEW | ENDORSE | CORRECT | DEDUPLICATE | DELETE",
+        "target_fact_id": "existing_fact_id_if_applicable",
+        "new_fact": "fact_object_if_creating_new",
+        "endorsement_boost": 0.0-0.3,
+        "correction_details": "what_was_corrected",
+        "reason": "explanation_of_operation"
+      }}
+    ],
+    "session_insights": {{
+      "total_facts": "number_of_facts_after_processing",
+      "new_facts_added": "count",
+      "facts_endorsed": "count",
+      "facts_corrected": "count",
+      "primary_focus": "what_conversation_mainly_about"
+    }}
+  }},
+  
+  "script_verification": "VERIFIED - All native scripts correct | CORRECTED - Fixed issues | ERROR - Verification failed"
+}}"""
+
+
 
 # --- Database Initialization ---
 init_conversation_db()
@@ -170,14 +344,124 @@ def get_tts_gender(gender_str):
     }
     return gender_map.get(str(gender_str).upper(), texttospeech.SsmlVoiceGender.SSML_VOICE_GENDER_UNSPECIFIED)
 
+def create_frontend_response(full_response: dict) -> dict:
+    """Create a cleaned response optimized for frontend consumption"""
+    
+    # Helper function to get language name from Azure service
+    def get_language_name(language_code: str) -> str:
+        """Get human-readable language name from Azure language dataset"""
+        global azure_speech_service
+        
+        if azure_speech_service and hasattr(azure_speech_service, 'languages_dataset'):
+            # Search in the loaded Azure language dataset
+            for lang in azure_speech_service.languages_dataset:
+                if lang.get('code', '').lower() == language_code.lower():
+                    return lang.get('name', language_code)
+            
+            # If not found, try matching just the base language code (e.g., 'en' from 'en-US')
+            base_code = language_code.split('-')[0].lower()
+            for lang in azure_speech_service.languages_dataset:
+                lang_base = lang.get('code', '').split('-')[0].lower()
+                if lang_base == base_code:
+                    return lang.get('name', language_code)
+        
+        # Fallback: extract readable name from code or return the code itself
+        if '-' in language_code:
+            return language_code.split('-')[0].capitalize()
+        return language_code.capitalize() if language_code else "Unknown"
+    
+    # Extract speaker information and create formatted speaker display
+    speaker_analysis = full_response.get("speaker_analysis", {})
+    speaker_name = speaker_analysis.get("speaker_identity", "")
+    audio_language = full_response.get("audio_language", "")
+    
+    # Get human-readable language name from Azure service
+    language_name = get_language_name(audio_language)
+    
+    # Create speaker display format: "Name (Language)" or just "Language" if no name
+    if speaker_name and speaker_name.strip():
+        speaker_display = f"{speaker_name} ({language_name})"
+    else:
+        speaker_display = language_name
+    
+    # Base response with essential fields only
+    frontend_response = {
+        # Core processing results
+        "timestamp": full_response.get("timestamp"),
+        "audio_language": full_response.get("audio_language"),
+        "transcription": full_response.get("transcription"),
+        "translation_language": full_response.get("translation_language"),
+        "translation": full_response.get("translation"),
+        "tone": full_response.get("tone"),
+        "Translation_with_gestures": full_response.get("Translation_with_gestures"),
+        
+        # Enhanced speaker information with fallback: "Name (Language)" or "Language"
+        "speaker_name": speaker_display,
+        
+        # Direct query handling
+        "is_direct_query": full_response.get("is_direct_query", False),
+        
+        # Session management
+        "session_id": full_response.get("session_id"),
+        
+        # Audio data
+        "translation_audio": full_response.get("translation_audio"),
+        "translation_audio_mime_type": full_response.get("translation_audio_mime_type"),
+        "audio_type": full_response.get("audio_type"),
+        
+        # Script verification status (useful for frontend)
+        "script_verification": full_response.get("script_verification"),
+    }
+    
+    # Include AI response if it's a direct query
+    if full_response.get("is_direct_query", False):
+        ai_response = full_response.get("ai_response", {})
+        frontend_response["ai_response"] = {
+            "answer_in_audio_language": ai_response.get("answer_in_audio_language"),
+            "answer_translated": ai_response.get("answer_translated"),
+            "answer_with_gestures": ai_response.get("answer_with_gestures"),
+            "confidence": ai_response.get("confidence", 0.0),
+            "expertise_area": ai_response.get("expertise_area", "general")
+        }
+        
+        # Include AI translation audio if available
+        if full_response.get("ai_translation_audio"):
+            frontend_response["ai_translation_audio"] = full_response.get("ai_translation_audio")
+            frontend_response["ai_translation_audio_mime_type"] = full_response.get("ai_translation_audio_mime_type")
+    
+    # Include error information if present
+    if full_response.get("tts_error"):
+        frontend_response["tts_error"] = full_response.get("tts_error")
+    if full_response.get("ai_translation_tts_error"):
+        frontend_response["ai_translation_tts_error"] = full_response.get("ai_translation_tts_error")
+    
+    # Remove any None values to keep response clean
+    frontend_response = {k: v for k, v in frontend_response.items() if v is not None}
+    
+    return frontend_response
+
 @lru_cache(maxsize=1)
 def get_azure_voices():
-    """Fetch and cache the list of available Azure TTS voices for the configured region."""
-    endpoint = f"https://{AZURE_SPEECH_REGION}.tts.speech.microsoft.com/cognitiveservices/voices/list"
-    headers = {"Ocp-Apim-Subscription-Key": AZURE_SPEECH_KEY}
-    response = requests.get(endpoint, headers=headers)
-    response.raise_for_status()
-    return response.json()
+    """Get the list of available Azure TTS voices from pre-loaded datasets."""
+    global azure_speech_service
+    
+    if azure_speech_service is None:
+        logger.error("Azure Speech Language Service not initialized")
+        return []
+    
+    try:
+        # Get voices from the pre-loaded dataset (synchronous access)
+        if hasattr(azure_speech_service, 'voices_dataset') and azure_speech_service.voices_dataset:
+            voices = azure_speech_service.voices_dataset.copy()
+            logger.debug(f"Retrieved {len(voices)} voices from Azure datasets")
+            return voices
+        else:
+            logger.warning("Azure voices dataset not loaded yet")
+            return []
+        
+    except Exception as e:
+        logger.error(f"Error retrieving Azure voices from datasets: {e}", exc_info=True)
+        return []
 
 async def generate_expert_response(query: str, context: List[ConversationItem], target_language: str) -> Dict:
     """Generate expert response using Gemini for assistant queries"""
@@ -220,46 +504,73 @@ def synthesize_text_to_audio_gemini(text: str, language_code: str, gender: textt
         selected_voice = None
         selected_voice_name = None
         
-        # Try to find exact match for language, gender, and style/tone
+        # Smart voice selection with single loop and priority-based matching
+        best_match_score = 0
+        fallback_voice = None
+        fallback_voice_name = None
+        
         for voice in voices:
-            if (voice['Locale'].lower().startswith(base_language)
-                and voice['Gender'].lower() == gender_str.lower()
-                and (tone.lower() in [s.lower() for s in voice.get('StyleList', [])])):
-                selected_voice = voice['ShortName']
-                selected_voice_name = voice['Name']
-                break
+            # Normalize voice data keys (handle both old and new formats)
+            voice_lang = voice.get('language_code', voice.get('Language', '')).lower()
+            voice_gender = voice.get('gender', voice.get('Gender', '')).lower()
+            voice_name = voice.get('shortname', voice.get('ShortName', ''))
+            voice_styles = voice.get('styles', [])
+            
+            # Calculate match score
+            match_score = 0
+            
+            # Language matching (highest priority)
+            if voice_lang == language_code.lower():
+                match_score += 100  # Exact language match
+            elif voice_lang.startswith(base_language):
+                match_score += 50   # Base language match
+            elif voice_lang.startswith('en'):
+                match_score += 10   # English fallback
+            else:
+                continue  # Skip non-matching languages
+            
+            # Gender matching (medium priority)
+            if voice_gender == gender_str.lower():
+                match_score += 30
+            elif voice_gender == 'neutral':
+                match_score += 15   # Neutral is acceptable fallback
+            
+            # Style/tone matching (lower priority)
+            if tone.lower() in [s.lower() for s in voice_styles]:
+                match_score += 20
+            
+            # Update best match if this voice scores higher
+            if match_score > best_match_score:
+                best_match_score = match_score
+                selected_voice = voice_name
+                selected_voice_name = voice.get('display_name', voice_name)
                 
-        # Fallback: match language and gender only
-        if not selected_voice:
-            for voice in voices:
-                if (voice['Locale'].lower().startswith(base_language)
-                    and voice['Gender'].lower() == gender_str.lower()):
-                    selected_voice = voice['ShortName']
-                    selected_voice_name = voice['Name']
+                # Perfect match found (exact language + gender + style)
+                if match_score >= 150:  # 100 + 30 + 20
+                    logger.info(f"Perfect voice match found with score {match_score}")
                     break
-                    
-        # Fallback: match language only
+            
+            # Keep track of any English voice as ultimate fallback
+            if not fallback_voice and voice_lang.startswith('en'):
+                fallback_voice = voice_name
+                fallback_voice_name = voice.get('display_name', voice_name)
+        
+        # Use fallback if no suitable voice found
         if not selected_voice:
-            for voice in voices:
-                if voice['Locale'].lower().startswith(base_language):
-                    selected_voice = voice['ShortName']
-                    selected_voice_name = voice['Name']
-                    break
-                    
-        # Fallback: use English neutral
-        if not selected_voice:
-            logger.warning(f"No supported Azure voice for language '{base_language}', gender '{gender_str}', tone '{tone}'. Falling back to English neutral.")
-            for voice in voices:
-                if voice['Locale'].lower().startswith('en') and voice['Gender'].lower() == 'neutral':
-                    selected_voice = voice['ShortName']
-                    selected_voice_name = voice['Name']
-                    break
-                    
-        if not selected_voice:
-            selected_voice = 'en-US-AriaNeural'  # Last resort
-            selected_voice_name = 'Microsoft Server Speech Text to Speech Voice (en-US, AriaNeural)'
+            if fallback_voice:
+                selected_voice = fallback_voice
+                selected_voice_name = fallback_voice_name
+                logger.warning(f"No suitable voice found for {language_code}/{gender_str}/{tone}. Using English fallback: {selected_voice}")
+            else:
+                selected_voice = 'en-US-AriaNeural'  # Ultimate fallback
+                selected_voice_name = 'Microsoft Server Speech Text to Speech Voice (en-US, AriaNeural)'
+                logger.warning(f"No voices available in dataset. Using hardcoded fallback: {selected_voice}")
 
-        logger.info(f"Selected Azure voice: {selected_voice} for {gender_str} {language_code} tone {tone}")
+        logger.info(f"Selected Azure voice: {selected_voice} (score: {best_match_score}) for {gender_str} {language_code} tone {tone}")
+        
+        # Process and clean the text for SSML
+        processed_text = process_text_to_ssml(text, tone)
+        cleaned_text = fix_ssml_content(processed_text)
         
         # Build SSML with all recommended namespaces and proper nesting
         ssml_text = f"""
@@ -267,10 +578,10 @@ def synthesize_text_to_audio_gemini(text: str, language_code: str, gender: textt
                 xmlns="http://www.w3.org/2001/10/synthesis"
                 xmlns:mstts="http://www.w3.org/2001/mstts"
                 xmlns:emo="http://www.w3.org/2009/10/emotionml"
-                xml:lang="en-US">
+                xml:lang="{language_code}">
 
-            <voice name="{selected_voice_name}">
-                {process_text_to_ssml(text, tone)}
+            <voice name="{selected_voice}">
+                {cleaned_text}
             </voice>
             </speak>"""
         
@@ -320,7 +631,8 @@ async def process_audio(
     file: UploadFile,
     main_language: str = Form(...),
     other_language: str = Form(...),
-    is_premium: str = Form("false")
+    is_premium: str = Form("false"),
+    session_id: str = Form(None)  # Optional session ID
 ):
     try:
         logger.info(f"Received file: name={file.filename}, content_type={file.content_type}")
@@ -335,19 +647,30 @@ async def process_audio(
         
         # Convert is_premium string to boolean
         is_premium_bool = is_premium.lower() == "true"
-          # User-specific part of the prompt for this request (language pair and premium status)
-        current_user_languages = f"Main Language {main_language}, {other_language}"
-        premium_text = "Premium user" if is_premium_bool else "Standard user"
         
-        # Create content with only user role and include system instructions in the user message
-        # For Gemini 2.0 Flash, we can't use "system" role directly
-        enhanced_user_message = f"""System Instructions:{SYSTEM_PROMPT} User request: {current_user_languages}"""
+        # Session management
+        if not session_id:
+            # Create new session
+            session_id = in_memory_sessions.create_session(
+                main_language=main_language,
+                other_language=other_language,
+                is_premium=is_premium_bool
+            )
+            logger.info(f"Created new session: {session_id}")
+        
+        # Build enhanced prompt with session context
+        enhanced_system_prompt = in_memory_sessions.build_enhanced_prompt(
+            session_id=session_id,
+            base_prompt=ENHANCED_SYSTEM_PROMPT,
+            current_text="",  # We'll add the transcription later
+            prompt_type="translation"
+        )
 
         # Use the modular Gemini service for audio processing
         gemini_result = process_audio_with_gemini(
             audio_content=audio_content,
             content_type=content_type,
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=enhanced_system_prompt,  # Use enhanced prompt with context
             main_language=main_language,
             other_language=other_language,
             is_premium=is_premium_bool
@@ -373,11 +696,15 @@ async def process_audio(
                     error_message=gemini_result.get('error_message', 'All models unavailable')
                 )
                 
+                # Add session ID and clean for frontend
+                response_json["session_id"] = session_id
+                frontend_fallback = create_frontend_response(response_json)
+                
                 # Return fallback response immediately (no TTS needed for error message)
                 return JSONResponse(
                     status_code=503,  # Service Unavailable
                     content={
-                        **response_json,
+                        **frontend_fallback,
                         "service_status": "temporarily_unavailable",
                         "retry_after": MODEL_RETRY_DELAY  # Use configurable delay
                     }
@@ -398,8 +725,10 @@ async def process_audio(
         except Exception as e:
             logger.warning(f"Gemini response validation failed: {e}. Creating fallback response.")
             response_json = create_fallback_response(response_text, main_language, other_language)
+            response_json["session_id"] = session_id  # Add session ID to fallback
+            frontend_fallback = create_frontend_response(response_json)
             logger.error("Using fallback response, skipping Text-to-Speech synthesis.")
-            return response_json  # Return the fallback JSON immediately
+            return frontend_fallback  # Return the cleaned fallback JSON immediately
 
         # --- Perform Text-to-Speech for Translation ---
         translation_text = response_json.get("translation")
@@ -407,7 +736,11 @@ async def process_audio(
         Translation_with_gestures = response_json.get("Translation_with_gestures")
         translation_language_code = response_json.get("translation_language", DEFAULT_TTS_LANGUAGE_CODE)
 
-        tts_gender = get_tts_gender(response_json.get("gender"))
+        # Extract gender from speaker_analysis (new structure)
+        speaker_analysis = response_json.get("speaker_analysis", {})
+        gender_str = speaker_analysis.get("gender", "NEUTRAL")
+        tts_gender = get_tts_gender(gender_str)
+        
         translation_audio_base64 = None
         direct_response_audio_base64 = None
 
@@ -426,7 +759,7 @@ async def process_audio(
                             text=processed_text,
                             language_code=translation_language_code,
                             gender=tts_gender,
-                            tone=tone
+                            tone='Informative'
                         )
                     except Exception as premium_exc:
                         logger.error(f"Premium Azure TTS failed: {premium_exc}. Falling back to standard TTS.", exc_info=True)
@@ -455,65 +788,178 @@ async def process_audio(
                 logger.error(f"Error during Text-to-Speech synthesis or encoding: {e}", exc_info=True)
                 response_json["tts_error"] = f"Failed to generate translation audio: {str(e)}"
 
-        # Synthesize direct_response audio if present and is_direct_query is true
-        if response_json.get("is_direct_query", False) and response_json.get("direct_response"):
-            direct_response_text = response_json["direct_response"]
-            direct_response_language = response_json.get("audio_language", DEFAULT_TTS_LANGUAGE_CODE)
+        # Synthesize AI response audio if present and is_direct_query is true
+        ai_response = response_json.get("ai_response", {})
+        if response_json.get("is_direct_query", False) and ai_response.get("answer_in_audio_language"):
+            ai_response_text = ai_response["answer_in_audio_language"]
+            ai_response_language = response_json.get("audio_language", DEFAULT_TTS_LANGUAGE_CODE)
+            
+            # Generate audio for AI response in original language
             try:
                 if is_premium_bool:
                     try:
-                        logger.info(f"Using Azure TTS for direct_response (premium) with tone: {tone}")
-                        # Apply robust SSML fixing for direct response
-                        processed_direct_response = fix_ssml_content(direct_response_text)
+                        logger.info(f"Using Azure TTS for AI response (premium) with tone: {tone}")
+                        # Apply robust SSML fixing for AI response
+                        processed_ai_response = fix_ssml_content(ai_response_text)
                         audio_content_bytes = synthesize_text_to_audio_gemini(
-                            text=processed_direct_response,
-                            language_code=direct_response_language,
+                            text=processed_ai_response,
+                            language_code=ai_response_language,
                             gender=tts_gender,
                             tone=tone
                         )
                     except Exception as premium_exc:
-                        logger.error(f"Premium Azure TTS failed for direct_response: {premium_exc}. Falling back to standard TTS.", exc_info=True)
-                        logger.info("Falling back to standard TTS after premium TTS failure (direct_response)")
+                        logger.error(f"Premium Azure TTS failed for AI response: {premium_exc}. Falling back to standard TTS.", exc_info=True)
+                        logger.info("Falling back to standard TTS after premium TTS failure (AI response)")
                         # Also apply SSML fixing for fallback
-                        processed_direct_response = fix_ssml_content(direct_response_text)
+                        processed_ai_response = fix_ssml_content(ai_response_text)
                         audio_content_bytes = synthesize_text_to_audio(
-                            text=processed_direct_response,
-                            language_code=direct_response_language,
+                            text=processed_ai_response,
+                            language_code=ai_response_language,
                             gender=tts_gender
                         )
                 else:
-                    logger.info("Using standard TTS for direct_response (non-premium)")
+                    logger.info("Using standard TTS for AI response (non-premium)")
                     # Apply SSML fixing for standard TTS too
-                    processed_direct_response = fix_ssml_content(direct_response_text)
+                    processed_ai_response = fix_ssml_content(ai_response_text)
                     audio_content_bytes = synthesize_text_to_audio(
-                        text=processed_direct_response,
-                        language_code=direct_response_language,
+                        text=processed_ai_response,
+                        language_code=ai_response_language,
                         gender=tts_gender
                     )
                 direct_response_audio_base64 = base64.b64encode(audio_content_bytes).decode('utf-8')
-                logger.info("Direct response audio synthesized and base64 encoded.")
+                logger.info("AI response audio synthesized and base64 encoded.")
             except HTTPException as http_exc:
                 raise http_exc
             except Exception as e:
-                logger.error(f"Error during TTS synthesis for direct_response: {e}", exc_info=True)
-                response_json["tts_error"] = f"Failed to generate direct_response audio: {str(e)}"
+                logger.error(f"Error during TTS synthesis for AI response: {e}", exc_info=True)
+                response_json["tts_error"] = f"Failed to generate AI response audio: {str(e)}"
 
-        # Add audio to response
+            # NEW: Generate audio for AI response TRANSLATION if available
+            ai_response_data = response_json.get("ai_response", {})
+            ai_answer_translated = ai_response_data.get("answer_translated")
+            ai_translation_audio_base64 = None
+            
+            if ai_answer_translated and translation_language_code != "unknown":
+                try:
+                    if is_premium_bool:
+                        try:
+                            logger.info(f"Using Azure TTS for AI response translation (premium)")
+                            processed_translation = fix_ssml_content(ai_answer_translated)
+                            audio_content_bytes = synthesize_text_to_audio_gemini(
+                                text=processed_translation,
+                                language_code=translation_language_code,
+                                gender=tts_gender,
+                                tone=tone
+                            )
+                        except Exception as premium_exc:
+                            logger.error(f"Premium Azure TTS failed for AI translation: {premium_exc}")
+                            logger.info("Falling back to standard TTS for AI translation")
+                            processed_translation = fix_ssml_content(ai_answer_translated)
+                            audio_content_bytes = synthesize_text_to_audio(
+                                text=processed_translation,
+                                language_code=translation_language_code,
+                                gender=tts_gender
+                            )
+                    else:
+                        logger.info("Using standard TTS for AI response translation")
+                        processed_translation = fix_ssml_content(ai_answer_translated)
+                        audio_content_bytes = synthesize_text_to_audio(
+                            text=processed_translation,
+                            language_code=translation_language_code,
+                            gender=tts_gender
+                        )
+                    ai_translation_audio_base64 = base64.b64encode(audio_content_bytes).decode('utf-8')
+                    logger.info("✅ AI response translation audio generated successfully")
+                    
+                except Exception as e:
+                    logger.error(f"Error generating AI response translation audio: {e}")
+                    response_json["ai_translation_tts_error"] = f"Failed to generate AI translation audio: {str(e)}"
+
+        # Add audio to response with enhanced handling for AI assistant
         if translation_audio_base64:
             response_json["translation_audio"] = translation_audio_base64
             response_json["translation_audio_mime_type"] = DEFAULT_AUDIO_MIME_TYPE
+            response_json["audio_type"] = "translation"
             logger.info("Added translation audio to response.")
         elif direct_response_audio_base64:
-            # For direct queries, use direct_response audio as translation_audio for frontend compatibility
+            # For direct queries, use direct_response audio as primary audio
             response_json["translation_audio"] = direct_response_audio_base64
             response_json["translation_audio_mime_type"] = DEFAULT_AUDIO_MIME_TYPE
+            response_json["audio_type"] = "ai_response"
             logger.info("Added direct_response audio to response as translation_audio.")
+            
+            # NEW: Add AI translation audio if available
+            if ai_translation_audio_base64:
+                response_json["ai_translation_audio"] = ai_translation_audio_base64
+                response_json["ai_translation_audio_mime_type"] = DEFAULT_AUDIO_MIME_TYPE
+                logger.info("Added AI response translation audio to response.")
         else:
             logger.warning("No audio generated (neither translation nor direct_response).")
             response_json["translation_audio"] = None
 
+        # --- Store conversation in session with ENHANCED fact integration ---
+        def enhanced_message_storage():
+            """Enhanced background task for message storage with asynchronous fact processing"""
+            try:
+                # Store the transcription with fact processing
+                if response_json.get("transcription"):
+                    in_memory_sessions.add_message_with_fact_processing(
+                        session_id=session_id,
+                        speaker="User",
+                        text=response_json["transcription"],
+                        language=response_json.get("audio_language", main_language),
+                        message_type="transcription",
+                        response_json=response_json  # Pass full response for fact processing
+                    )
+                
+                # Store the translation or AI response (without duplicating fact processing)
+                ai_response = response_json.get("ai_response", {})
+                if response_json.get("is_direct_query", False):
+                    # For AI direct queries, store both the original response and its translation
+                    if ai_response.get("answer_in_audio_language"):
+                        in_memory_sessions.add_message(
+                            session_id=session_id,
+                            speaker="AI Assistant",
+                            text=ai_response["answer_in_audio_language"],
+                            language=response_json.get("audio_language", main_language),
+                            message_type="ai_response"
+                        )
+                    
+                    # Also store the translated AI response if available
+                    if ai_response.get("answer_translated"):
+                        in_memory_sessions.add_message(
+                            session_id=session_id,
+                            speaker="AI Assistant (Translated)",
+                            text=ai_response["answer_translated"],
+                            language=response_json.get("translation_language", other_language),
+                            message_type="ai_response_translated"
+                        )
+                elif response_json.get("translation"):
+                    in_memory_sessions.add_message(
+                        session_id=session_id,
+                        speaker="Translator",
+                        text=response_json["translation"],
+                        language=response_json.get("translation_language", other_language),
+                        message_type="translation"
+                    )
+                
+                logger.info(f"✅ Enhanced message storage with fact processing completed for session {session_id}")
+            except Exception as e:
+                logger.error(f"❌ Enhanced message storage failed for session {session_id}: {e}")
+        
+        # Start enhanced message storage in background thread (non-blocking)
+        storage_thread = threading.Thread(target=enhanced_message_storage, daemon=True)
+        storage_thread.start()
+        logger.info(f"🚀 Started enhanced message storage with async fact processing for session {session_id} - response will be sent immediately")
+        
+        # Add session ID to response
+        response_json["session_id"] = session_id
+
+        # Clean up response for frontend (remove unnecessary data)
+        frontend_response = create_frontend_response(response_json)
+
         logger.info("Successfully processed audio file and prepared response.")
-        return response_json # Return the final JSON response
+        return frontend_response # Return the cleaned JSON response
 
     except HTTPException as http_exc:
         # Catch and re-raise HTTPExceptions
@@ -524,17 +970,30 @@ async def process_audio(
         raise HTTPException(status_code=500, detail=f"An internal server error occurred: {str(e)}")
 
 @app.get("/available-languages/")
-def available_languages():
+async def available_languages():
     """Return a list of distinct languages (with display names) available for TTS in this Azure region."""
-    voices = get_azure_voices()
-    # Map locale to display name, e.g. 'da-DK': 'Danish (Denmark)'
-    lang_map = {}
-    for v in voices:
-        lang_code = v['Locale']
-        lang_name = v['LocaleName'] if 'LocaleName' in v else v['Locale']
-        lang_map[lang_code] = lang_name
-    # Return as a sorted list of dicts
-    return JSONResponse([{"code": code, "name": name} for code, name in sorted(lang_map.items(), key=lambda x: x[1])])
+    global azure_speech_service
+    
+    if azure_speech_service is None:
+        logger.error("Azure Speech Language Service not initialized")
+        return JSONResponse({"error": "Azure Speech service not available"}, status_code=503)
+    
+    try:
+        # Try to get languages from pre-loaded dataset first (synchronous)
+        if hasattr(azure_speech_service, 'languages_dataset') and azure_speech_service.languages_dataset:
+            languages = azure_speech_service.languages_dataset.copy()
+            logger.debug(f"Retrieved {len(languages)} languages from Azure datasets")
+            return JSONResponse(languages)
+        else:
+            # Fall back to async method if dataset not loaded
+            logger.info("Languages dataset not loaded, attempting async load")
+            languages = await azure_speech_service.get_supported_languages()
+            logger.debug(f"Retrieved {len(languages)} languages from Azure datasets (async)")
+            return JSONResponse(languages)
+        
+    except Exception as e:
+        logger.error(f"Error retrieving Azure languages from datasets: {e}", exc_info=True)
+        return JSONResponse({"error": "Failed to retrieve languages"}, status_code=500)
 
 @app.get("/available-voices/")
 def available_voices():
@@ -659,6 +1118,145 @@ async def translate_text(
     except Exception as e:
         logger.error(f"Error in translate_text endpoint: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+
+# ==============================================
+# SESSION MANAGEMENT ENDPOINTS
+# ==============================================
+
+@app.post("/api/session/create")
+async def create_session(
+    main_language: str = Form(...),
+    other_language: str = Form(...),
+    is_premium: str = Form("false")
+):
+    """Create a new conversation session"""
+    try:
+        is_premium_bool = is_premium.lower() == "true"
+        
+        session_id = in_memory_sessions.create_session(
+            main_language=main_language,
+            other_language=other_language,
+            is_premium=is_premium_bool
+        )
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "main_language": main_language,
+            "other_language": other_language,
+            "is_premium": is_premium_bool,
+            "created_at": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error creating session: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create session: {str(e)}")
+
+@app.get("/api/session/{session_id}/context")
+async def get_session_context(session_id: str):
+    """Get session context including facts and recent messages"""
+    try:
+        context = in_memory_sessions.get_session_context(session_id)
+        
+        if not context["context_analysis"]["exists"]:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        return context
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting session context: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get session context: {str(e)}")
+
+@app.get("/api/session/{session_id}/comprehensive-context")
+async def get_comprehensive_session_context(session_id: str, query: str = ""):
+    """Get comprehensive session context including facts categorization and conversation analysis"""
+    try:
+        context = in_memory_sessions.get_comprehensive_session_context(session_id, query)
+        
+        if not context.get("context_analysis", {}).get("exists", False):
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        return context
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting comprehensive session context: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get comprehensive context: {str(e)}")
+
+@app.get("/api/session/{session_id}/facts")
+async def get_session_facts(session_id: str):
+    """Get extracted facts from session"""
+    try:
+        context = in_memory_sessions.get_session_context(session_id)
+        
+        if not context["context_analysis"]["exists"]:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        return {
+            "session_id": session_id,
+            "facts": context["memory_facts"],
+            "facts_count": len(context["memory_facts"]),
+            "session_info": context["session_info"]
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting session facts: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get session facts: {str(e)}")
+
+@app.get("/api/session/{session_id}/fact-status")
+async def get_fact_extraction_status(session_id: str):
+    """Get real-time fact extraction status for a session"""
+    try:
+        context = in_memory_sessions.get_session_context(session_id)
+        
+        if not context["context_analysis"]["exists"]:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        session_info = context["session_info"]
+        facts_count = session_info.get("facts_count", 0)
+        message_count = session_info.get("message_count", 0)
+        
+        # Calculate extraction progress (rough estimate)
+        extraction_progress = min(100, (facts_count / max(1, message_count)) * 100)
+        
+        return {
+            "session_id": session_id,
+            "fact_extraction_status": {
+                "facts_extracted": facts_count,
+                "messages_processed": message_count,
+                "extraction_progress_percent": round(extraction_progress, 1),
+                "is_extracting": facts_count < message_count,  # Simple heuristic
+                "last_activity": session_info.get("last_activity"),
+                "duration_minutes": session_info.get("duration_minutes", 0)
+            },
+            "recent_facts": list(context["memory_facts"].values())[-3:] if context["memory_facts"] else []  # Last 3 facts
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting fact extraction status: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get fact extraction status: {str(e)}")
+
+@app.delete("/api/session/{session_id}")
+async def end_session(session_id: str):
+    """End session and export conversation"""
+    try:
+        export_path = in_memory_sessions.export_session_to_file(session_id)
+        
+        if not export_path:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        return {
+            "success": True,
+            "message": "Session ended and conversation exported",
+            "export_path": export_path
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error ending session: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to end session: {str(e)}")
 
 # ==============================================
 # CONVERSATION AND AI ASSISTANT ENDPOINTS
@@ -799,8 +1397,13 @@ async def analyze_audio_comprehensive(
         
         logger.info(f"Transcription completed: {transcription[:50]}...")
         
-        # Step 2: Analyze intent
-        intent_analysis = analyze_conversation_intent(transcription, conversation_context)
+        # Step 2: Analyze intent using AI-powered multilingual detection
+        session_context = in_memory_sessions.get_session_context(sessionId) if sessionId else None
+        intent_analysis = analyze_conversation_intent_with_ai(
+            text=transcription,
+            detected_language=detected_language,
+            session_context=session_context
+        )
         
         # Step 3: Process based on intent
         result = ComprehensiveAudioResult(

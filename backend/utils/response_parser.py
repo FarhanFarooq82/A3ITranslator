@@ -66,21 +66,52 @@ def create_fallback_response(raw_text: str, main_language: str = "unknown", othe
     """Create a valid response when JSON parsing completely fails"""
     return {
         "timestamp": datetime.utcnow().isoformat(),
-        "gender": "NEUTRAL",
         "audio_language": main_language if main_language != "unknown" else "unknown",
         "transcription": raw_text[:200] + "..." if len(raw_text) > 200 else raw_text,
         "translation_language": other_language if other_language != "unknown" else "unknown", 
         "translation": "Error: Could not parse model response",
         "tone": "neutral",
         "Translation_with_gestures": "Error: Could not parse model response",
+        
+        "speaker_analysis": {
+            "gender": "NEUTRAL",
+            "language": main_language if main_language != "unknown" else "unknown",
+            "estimated_age_range": "adult",
+            "is_known_speaker": False,
+            "speaker_identity": None,
+            "confidence": 0.0
+        },
+        
         "is_direct_query": False,
+        
+        "ai_response": {
+            "answer_in_audio_language": "",
+            "answer_translated": "",
+            "answer_with_gestures": "",
+            "confidence": 0.0,
+            "expertise_area": "general"
+        },
+        
+        "fact_management": {
+            "extracted_facts": [],
+            "fact_operations": [],
+            "session_insights": {
+                "total_facts": 0,
+                "new_facts_added": 0,
+                "facts_endorsed": 0,
+                "facts_corrected": 0,
+                "primary_focus": "parsing_error"
+            }
+        },
+        
+        "script_verification": "ERROR - JSON parsing failed",
         "error_detail": "JSON parsing failed completely. Raw response included in transcription."
     }
 
 
 def validate_and_fix_response(response_text: str, main_language: str = "unknown", other_language: str = "unknown") -> Dict[str, Any]:
     """
-    Parse, validate, and fix JSON response from Gemini
+    Parse, validate, and fix comprehensive JSON response from Gemini
     
     Args:
         response_text: Raw response text from Gemini
@@ -100,30 +131,82 @@ def validate_and_fix_response(response_text: str, main_language: str = "unknown"
     # Always set timestamp locally (more reliable than depending on model)
     response_json["timestamp"] = datetime.utcnow().isoformat()
     
-    # Ensure required fields exist with defaults
-    defaults = {
-        "gender": "NEUTRAL",
+    # Ensure core required fields exist with defaults
+    core_defaults = {
         "audio_language": main_language if main_language != "unknown" else "unknown",
         "transcription": "",
         "translation_language": other_language if other_language != "unknown" else "unknown",
         "translation": "",
         "tone": "neutral", 
         "Translation_with_gestures": "",
-        "is_direct_query": False
+        "is_direct_query": False,
+        "script_verification": "PENDING"
     }
     
-    for key, default_value in defaults.items():
+    for key, default_value in core_defaults.items():
         if key not in response_json or response_json[key] is None:
             response_json[key] = default_value
-            logger.warning(f"Missing field '{key}' set to default: {default_value}")
+            logger.warning(f"Missing core field '{key}' set to default: {default_value}")
+    
+    # Ensure speaker_analysis structure
+    if "speaker_analysis" not in response_json:
+        response_json["speaker_analysis"] = {}
+    
+    speaker_defaults = {
+        "gender": "NEUTRAL",
+        "language": response_json.get("audio_language", main_language),
+        "estimated_age_range": "adult",
+        "is_known_speaker": False,
+        "speaker_identity": None,
+        "confidence": 0.0
+    }
+    
+    for key, default_value in speaker_defaults.items():
+        if key not in response_json["speaker_analysis"]:
+            response_json["speaker_analysis"][key] = default_value
+    
+    # Ensure ai_response structure
+    if "ai_response" not in response_json:
+        response_json["ai_response"] = {}
+    
+    ai_response_defaults = {
+        "answer_in_audio_language": "",
+        "answer_translated": "",
+        "answer_with_gestures": "",
+        "confidence": 0.0,
+        "expertise_area": "general"
+    }
+    
+    for key, default_value in ai_response_defaults.items():
+        if key not in response_json["ai_response"]:
+            response_json["ai_response"][key] = default_value
+    
+    # Ensure fact_management structure
+    if "fact_management" not in response_json:
+        response_json["fact_management"] = {}
+    
+    if "extracted_facts" not in response_json["fact_management"]:
+        response_json["fact_management"]["extracted_facts"] = []
+    
+    if "fact_operations" not in response_json["fact_management"]:
+        response_json["fact_management"]["fact_operations"] = []
+    
+    if "session_insights" not in response_json["fact_management"]:
+        response_json["fact_management"]["session_insights"] = {
+            "total_facts": 0,
+            "new_facts_added": 0,
+            "facts_endorsed": 0,
+            "facts_corrected": 0,
+            "primary_focus": "general"
+        }
     
     # Validate gender values
     valid_genders = ["MALE", "FEMALE", "NEUTRAL"]
-    if response_json["gender"].upper() not in valid_genders:
-        logger.warning(f"Invalid gender '{response_json['gender']}', defaulting to NEUTRAL")
-        response_json["gender"] = "NEUTRAL"
+    if response_json["speaker_analysis"]["gender"].upper() not in valid_genders:
+        logger.warning(f"Invalid gender '{response_json['speaker_analysis']['gender']}', defaulting to NEUTRAL")
+        response_json["speaker_analysis"]["gender"] = "NEUTRAL"
     else:
-        response_json["gender"] = response_json["gender"].upper()
+        response_json["speaker_analysis"]["gender"] = response_json["speaker_analysis"]["gender"].upper()
     
     # Validate boolean fields
     if not isinstance(response_json["is_direct_query"], bool):
@@ -133,10 +216,46 @@ def validate_and_fix_response(response_text: str, main_language: str = "unknown"
         else:
             response_json["is_direct_query"] = False
     
-    # Ensure direct_response field exists when is_direct_query is True
-    if response_json["is_direct_query"] and "direct_response" not in response_json:
-        response_json["direct_response"] = "I'm here to help with your translation needs."
-        logger.warning("is_direct_query was True but direct_response was missing. Added default.")
+    if not isinstance(response_json["speaker_analysis"]["is_known_speaker"], bool):
+        if str(response_json["speaker_analysis"]["is_known_speaker"]).lower() in ['true', '1', 'yes']:
+            response_json["speaker_analysis"]["is_known_speaker"] = True
+        else:
+            response_json["speaker_analysis"]["is_known_speaker"] = False
+    
+    # Validate confidence values (0.0 to 1.0)
+    confidence_fields = [
+        ("speaker_analysis", "confidence"),
+        ("ai_response", "confidence")
+    ]
+    
+    for parent, field in confidence_fields:
+        if parent in response_json and field in response_json[parent]:
+            try:
+                conf_val = response_json[parent][field]
+                
+                # Handle None or null values
+                if conf_val is None:
+                    response_json[parent][field] = 0.0
+                    continue
+                
+                # Handle string values (convert to float)
+                if isinstance(conf_val, str):
+                    # Handle empty strings
+                    if not conf_val.strip():
+                        response_json[parent][field] = 0.0
+                        continue
+                    # Try to convert string to float
+                    conf_val = float(conf_val)
+                
+                # Handle numeric values (int or float)
+                conf_val = float(conf_val)
+                
+                # Clamp to valid range (0.0 to 1.0)
+                response_json[parent][field] = max(0.0, min(1.0, conf_val))
+                
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Invalid confidence value for {parent}.{field}: {response_json[parent][field]}. Setting to 0.0")
+                response_json[parent][field] = 0.0
     
     # Clean up text fields
     text_fields = ["transcription", "translation", "direct_response", "tone"]

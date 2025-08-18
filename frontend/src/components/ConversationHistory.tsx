@@ -1,12 +1,27 @@
 import React from 'react';
 import { languages } from '../constants/languages';
+import './ConversationHistory.css';
 
 interface ConversationMessage {
   text: string;
   language: string;
   speaker: string;
   timestamp: string;
-  type?: 'transcription' | 'translation'; // Make type optional for backward compatibility
+  type?: 'transcription' | 'translation' | 'ai_response'; // Enhanced type support
+  // AI Response specific fields
+  isDirectQuery?: boolean;
+  aiResponse?: {
+    answer_in_audio_language?: string;
+    answer_translated?: string;
+    answer_with_gestures?: string;
+    confidence?: number;
+    expertise_area?: string;
+  };
+  // Legacy support (deprecated)
+  directResponse?: string;
+  translation?: string;
+  originalText?: string;
+  targetLanguage?: string;
 }
 
 interface ConversationHistoryProps {
@@ -55,10 +70,45 @@ const ConversationHistory: React.FC<ConversationHistoryProps> = ({ conversation,
     return languageCode;
   };
 
-  // Simplified color legend - only two colors
+  // Get language flag for visual enhancement
+  const getLanguageFlag = (languageCode: string): string => {
+    const flags: { [key: string]: string } = {
+      'en-US': '🇺🇸', 'en-GB': '🇬🇧', 'ur-PK': '🇵🇰', 'hi-IN': '🇮🇳',
+      'ar-SA': '🇸🇦', 'fr-FR': '🇫🇷', 'es-ES': '🇪🇸', 'de-DE': '🇩🇪',
+      'it-IT': '🇮🇹', 'pt-BR': '🇧🇷', 'ru-RU': '🇷🇺', 'ja-JP': '🇯🇵',
+      'ko-KR': '🇰🇷', 'zh-CN': '🇨🇳', 'nl-NL': '🇳🇱', 'sv-SE': '🇸🇪',
+      'da-DK': '🇩🇰', 'no-NO': '🇳🇴', 'fi-FI': '🇫🇮', 'pl-PL': '🇵🇱',
+      'tr-TR': '🇹🇷', 'he-IL': '🇮🇱', 'th-TH': '🇹🇭', 'vi-VN': '🇻🇳',
+      'id-ID': '🇮🇩', 'ms-MY': '🇲🇾', 'bn-BD': '🇧🇩', 'fa-IR': '🇮🇷'
+    };
+    return flags[languageCode] || '🌐';
+  };
+
+  // Detect if message is a question (simplified approach)
+  const isQuestion = (message: ConversationMessage): boolean => {
+    // Check if it's marked as an AI response type
+    if (message.type === 'ai_response') {
+      return false; // AI responses are not questions
+    }
+    
+    // Check if message text contains question indicators
+    if (message.text) {
+      const text = message.text.toLowerCase();
+      return text.includes('translator') ||
+             message.text.includes('?') ||
+             message.text.includes('؟') || // Arabic question mark
+             message.text.includes('？'); // Japanese/Chinese question mark
+    }
+    
+    return false;
+  };
+
+  // Enhanced color legend - three colors for different message types
   const legend = [
     { color: '#2563eb', label: `${getLanguageName(mainLanguage)} Messages` },
-    { color: '#059669', label: 'Other Language Messages' }
+    { color: '#059669', label: 'Other Language Messages' },
+    { color: '#f59e0b', label: 'Questions' },
+    { color: '#10b981', label: 'AI Responses' }
   ];
   
   const formatToLocalTime = (isoOrTime: string) => {
@@ -150,9 +200,26 @@ const ConversationHistory: React.FC<ConversationHistoryProps> = ({ conversation,
           
           // Now render each message group
           return sortedGroups.map((group, groupIdx) => {
+            // Check if this group contains questions or AI responses
+            const hasQuestion = group.messages.some(msg => isQuestion(msg));
+            const hasAIResponse = group.messages.some(msg => msg.type === 'ai_response');
+            
             const isMainLanguage = group.language === mainLanguage;
-            const alignment = isMainLanguage ? 'flex-start' : 'flex-end';
-            const color = isMainLanguage ? '#2563eb' : '#059669';
+            let alignment = isMainLanguage ? 'flex-start' : 'flex-end';
+            let color = isMainLanguage ? '#2563eb' : '#059669';
+            let backgroundColor = isMainLanguage ? '#eef2ff' : '#ecfdf5';
+            
+            // Override colors for questions and AI responses
+            if (hasAIResponse) {
+              color = '#10b981';
+              backgroundColor = '#ecfdf5';
+              alignment = 'flex-start';
+            } else if (hasQuestion) {
+              color = '#f59e0b';
+              backgroundColor = '#fffbeb';
+              alignment = 'flex-start';
+            }
+            
             const languageName = getLanguageName(group.language);
             
             return (
@@ -161,39 +228,83 @@ const ConversationHistory: React.FC<ConversationHistoryProps> = ({ conversation,
                   color,
                   margin: '0.6em 0',
                   padding: '0.8em 1em',
-                  backgroundColor: isMainLanguage ? '#eef2ff' : '#ecfdf5',
+                  backgroundColor,
                   borderRadius: '0.8rem',
-                  borderTopLeftRadius: isMainLanguage ? '0' : '0.8rem',
-                  borderTopRightRadius: isMainLanguage ? '0.8rem' : '0',
+                  borderTopLeftRadius: alignment === 'flex-start' ? '0' : '0.8rem',
+                  borderTopRightRadius: alignment === 'flex-start' ? '0.8rem' : '0',
                   whiteSpace: 'pre-line',
                   wordBreak: 'break-word',
                   maxWidth: '85%',
                   alignSelf: alignment,
                   boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05)',
-                  borderLeft: isMainLanguage ? `3px solid ${color}` : 'none',
-                  borderRight: isMainLanguage ? 'none' : `3px solid ${color}`
+                  borderLeft: alignment === 'flex-start' ? `3px solid ${color}` : 'none',
+                  borderRight: alignment === 'flex-start' ? 'none' : `3px solid ${color}`
                 }}>
                   <div className="flex justify-between mb-1">
                     <span style={{fontSize:'0.8em', color:'#6b7280', fontWeight: 'bold'}}>
-                      🎤 {languageName}
+                      {hasAIResponse ? '🤖' : hasQuestion ? '❓' : '🎤'} {languageName}
+                      {hasAIResponse && ' (AI Assistant)'}
+                      {hasQuestion && !hasAIResponse && ' (Question)'}
                     </span>
                     <span style={{fontSize:'0.8em', color:'#6b7280'}}>
                       {formatToLocalTime(group.timestamp)}
                     </span>
                   </div>
                   
-                  {/* Show transcription and translation without separators between them */}
+                  {/* Enhanced message rendering with question and AI response support */}
                   {group.messages.map((msg, msgIdx) => {
                     const msgType = msg.type || 'transcription';
+                    const msgIsQuestion = isQuestion(msg);
+                    
                     return (
-                      <div key={msgIdx} className="mb-0">
-                        {/* Add an icon only for translation */}
-                        {msgType === 'translation' && (
+                      <div key={msgIdx} className="mb-1">
+                        {/* Enhanced icons for different message types */}
+                        {msgType === 'translation' && !msgIsQuestion && (
                           <span style={{fontSize: '0.8em', marginRight: '4px', color: '#666'}}>
                             🔄
                           </span>
                         )}
-                        <span style={{color: '#1f2937'}}>{msg.text}</span>
+                        {msgType === 'ai_response' && (
+                          <span style={{fontSize: '0.8em', marginRight: '4px', color: '#10b981'}}>
+                            🤖
+                          </span>
+                        )}
+                        {msgIsQuestion && msgType !== 'ai_response' && (
+                          <span style={{fontSize: '0.8em', marginRight: '4px', color: '#f59e0b'}}>
+                            ❓
+                          </span>
+                        )}
+                        
+                        {/* Enhanced text styling for different message types */}
+                        <span style={{
+                          color: msgType === 'ai_response' ? '#065f46' : 
+                                 msgIsQuestion ? '#92400e' : '#1f2937',
+                          fontWeight: msgIsQuestion || msgType === 'ai_response' ? '600' : 'normal',
+                          fontSize: msgIsQuestion ? '1.05em' : '1em'
+                        }}>
+                          {/* Show AI response content appropriately */}
+                          {msgType === 'ai_response' ? 
+                            (msg.aiResponse?.answer_in_audio_language || msg.directResponse || msg.text) : 
+                            msg.text
+                          }
+                        </span>
+                        
+                        {/* Show AI response translation if available */}
+                        {msgType === 'ai_response' && msg.aiResponse?.answer_translated && (
+                          <div style={{
+                            marginTop: '0.5em',
+                            paddingTop: '0.5em',
+                            borderTop: '1px solid rgba(0,0,0,0.1)',
+                            fontSize: '0.95em',
+                            fontStyle: 'italic',
+                            color: '#7c2d12'
+                          }}>
+                            <span style={{fontSize: '0.8em', marginRight: '4px', color: '#666'}}>
+                              {getLanguageFlag(msg.targetLanguage || 'en-US')} Translation:
+                            </span>
+                            {msg.aiResponse.answer_translated}
+                          </div>
+                        )}
                       </div>
                     );
                   })}

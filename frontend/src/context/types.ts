@@ -76,7 +76,19 @@ export interface ConversationItem {
   language: string;
   speaker: string;
   timestamp: string;
-  type: 'transcription' | 'translation'; // Add type to distinguish between transcription and translation
+  type: 'transcription' | 'translation' | 'ai_response'; // Removed ai_response_translated since translation is embedded
+  // AI Response specific fields
+  isDirectQuery?: boolean;
+  aiResponse?: {
+    answer_in_audio_language?: string;
+    answer_translated?: string;
+    answer_with_gestures?: string;
+    confidence?: number;
+    expertise_area?: string;
+  };
+  // Legacy support (deprecated)
+  directResponse?: string;
+  targetLanguage?: string;
 }
 
 /**

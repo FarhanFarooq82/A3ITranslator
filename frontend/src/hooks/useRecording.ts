@@ -68,7 +68,7 @@ export const useRecording = () => {
       });
     }
     
-    // Always add translation to conversation (translated language)
+    // Always add translation to conversation (from response.translation)
     if (response.translation && response.translation_language) {
       dispatch({
         type: ActionType.ADD_CONVERSATION_ITEM,
@@ -80,6 +80,28 @@ export const useRecording = () => {
           type: 'translation'
         }
       });
+    }
+    
+    // Add AI responses AFTER translation (for direct queries)
+    if (response.is_direct_query && response.ai_response) {
+      const aiResponse = response.ai_response;
+      
+      // Add AI response in original language (translation will be shown embedded within this message)
+      if (aiResponse.answer_in_audio_language) {
+        dispatch({
+          type: ActionType.ADD_CONVERSATION_ITEM,
+          item: {
+            text: aiResponse.answer_in_audio_language,
+            language: response.audio_language || 'en-US',
+            speaker: 'AI Assistant',
+            timestamp: response.timestamp || new Date().toISOString(),
+            type: 'ai_response',
+            isDirectQuery: true,
+            aiResponse: aiResponse,
+            targetLanguage: response.translation_language // Add target language for embedded translation display
+          }
+        });
+      }
     }
   }, [dispatch]);
 

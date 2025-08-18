@@ -43,19 +43,25 @@ def fix_ssml_content(text: str) -> str:
     text = re.sub(r'<voice[^>]*>', '', text)
     text = re.sub(r'</voice>', '', text)
     
-    # Fix unclosed SSML tags
+    # Fix malformed break tags with double slashes (common AI generation issue)
+    malformed_breaks = len(re.findall(r'<break([^>]*?)//>', text))
+    text = re.sub(r'<break([^>]*?)//>', r'<break\1/>', text)
+    if malformed_breaks > 0:
+        logger.info(f"Fixed {malformed_breaks} malformed <break> tags with double slashes")
+    
+    # Fix other malformed self-closing tags
+    text = re.sub(r'<(break|pause)([^>]*?)//>', r'<\1\2/>', text)
+    
+    # Escape problematic characters in text content
+    # Escape single quotes inside attribute values
+    text = re.sub(r"(\w+)='([^']*)'s([^']*)'", r'\1="\2&apos;s\3"', text)
+    
     # Fix unclosed <prosody> tags
     prosody_open = len(re.findall(r'<prosody[^>]*>', text))
     prosody_close = len(re.findall(r'</prosody>', text))
     if prosody_open > prosody_close:
         text += '</prosody>' * (prosody_open - prosody_close)
         logger.info(f"Fixed {prosody_open - prosody_close} unclosed <prosody> tags")
-    
-    # Fix unclosed <break> tags (should be self-closing)
-    breaks_fixed = len(re.findall(r'<break([^>]*)>(?!</)', text))
-    text = re.sub(r'<break([^>]*)>(?!</)', r'<break\1/>', text)
-    if breaks_fixed > 0:
-        logger.info(f"Fixed {breaks_fixed} non-self-closing <break> tags")
     
     # Fix unclosed <emphasis> tags
     emphasis_open = len(re.findall(r'<emphasis[^>]*>', text))

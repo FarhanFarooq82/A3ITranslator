@@ -13,8 +13,8 @@ const LanguageSelector = ({ value, onChange, label }: {
     useEffect(() => {
         setLoading(true);
         fetchAvailableLanguages()
-            .then((langs: { code: string; name: string }[]) => {
-                setOptions(langs.map((l) => ({ value: l.code, label: l.name })));
+            .then((langs: { code: string; display_name: string }[]) => {
+                setOptions(langs.map((l) => ({ value: l.code, label: l.display_name })));
                 setLoading(false);
             })
             .catch(() => {

@@ -8,6 +8,24 @@ interface TranslationResponse {
   translation_audio?: string;
   translation_audio_mime_type?: string;
   timestamp?: string;
+  // AI Response fields (for direct queries)
+  is_direct_query?: boolean;
+  ai_response?: {
+    answer_in_audio_language?: string;
+    answer_translated?: string;
+    answer_with_gestures?: string;
+    confidence?: number;
+    expertise_area?: string;
+  };
+  // Speaker analysis (with language field)
+  speaker_analysis?: {
+    gender?: string;
+    language?: string;
+    estimated_age_range?: string;
+    is_known_speaker?: boolean;
+    speaker_identity?: string;
+    confidence?: number;
+  };
 }
 
 export class TranslationService {
