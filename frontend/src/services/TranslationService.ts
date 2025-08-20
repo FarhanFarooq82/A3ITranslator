@@ -42,6 +42,7 @@ export class TranslationService {
    * @param mainLanguage The user's main language
    * @param otherLanguage The language to translate to/from
    * @param isPremium Whether the user has premium features
+   * @param sessionId The session ID to maintain conversation context
    * @param isRetry Whether this is a retry with original untrimmed audio
    * @returns Translation response from the API
    */
@@ -50,6 +51,7 @@ export class TranslationService {
     mainLanguage: string,
     otherLanguage: string,
     isPremium: boolean = false,
+    sessionId?: string,
     isRetry: boolean = false
   ): Promise<TranslationResponse> {
     // Store original audio on first attempt for potential retry
@@ -62,6 +64,11 @@ export class TranslationService {
     formData.append('main_language', mainLanguage);
     formData.append('other_language', otherLanguage);
     formData.append('is_premium', isPremium.toString());
+    
+    // Include session ID if provided to maintain conversation context
+    if (sessionId) {
+      formData.append('session_id', sessionId);
+    }
 
     try {
       const response = await fetch(this.backendApiUrl, {
@@ -93,6 +100,7 @@ export class TranslationService {
           mainLanguage,
           otherLanguage,
           isPremium,
+          sessionId, // pass the session ID
           true // mark as retry
         );
       }

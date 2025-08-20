@@ -100,8 +100,7 @@ class InMemorySessionService:
     
     def get_session_context(self, session_id: str, max_messages: int = None) -> Dict[str, Any]:
         """Get session context for AI processing"""
-        if max_messages is None:
-            max_messages = self.max_context_messages
+        max_messages = self.max_context_messages
             
         with self.lock:
             if session_id not in self.sessions:

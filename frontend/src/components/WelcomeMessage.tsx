@@ -30,8 +30,8 @@ export const WelcomeMessage = ({
 
   // Default welcome message in English
   const defaultWelcomeMessage = 
-    "Welcome to A3I Translator. This tool translates conversations in real-time. " +
-    "Like human translators, there may sometimes be inaccuracies in listening, transcription, or translation. " +
+    "Welcome to AI Translator. Please Introduce yourself with your name and purpose of the meeting. This tool translates conversations in real-time. " +
+    "There might be some inaccuracies in listening, transcription, or translation, just like humans. " +
     "Please monitor the conversation text on screen and if needed, repeat yourself using different words. " +
     "Let's begin your translation session.";
 

@@ -150,3 +150,15 @@ temp/
 *.bak
 *.backup
 *.old
+
+# ===========================================
+# TESTS & DOCUMENTATION
+# ===========================================
+# Exclude all markdown files
+*.md
+**/*.md
+# Exclude all Python test files
+**/test*.py
+# Exclude all frontend/unit/integration test files
+**/*.test.*
+**/__tests__/**

@@ -188,12 +188,28 @@ export const useRecording = () => {
     dispatch({ type: ActionType.START_TRANSLATION });
     
     try {
+      // CRITICAL FIX: Ensure we always have a session ID before processing audio
+      let sessionId = state.sessionId;
+      if (!sessionId) {
+        console.warn('No session ID found, creating new session for audio processing');
+        // Generate a session ID using the same method as SessionService
+        sessionId = Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 10);
+        
+        // Update the state with the new session ID
+        dispatch({
+          type: ActionType.START_SESSION,
+          id: sessionId,
+          expiry: Date.now() + (2 * 60 * 60 * 1000) // 2 hours
+        });
+      }
+
       // Send audio to translation service (with retry capability for trimmed audio)
       const response = await translationService.current.sendAudioForTranslation(
         audioBlob,
         state.mainLanguage,
         state.otherLanguage,
         state.isPremium,
+        sessionId, // Always pass a valid session ID
         false // not a retry
       );
       
@@ -240,7 +256,7 @@ export const useRecording = () => {
       
       return undefined;
     }
-  }, [dispatch, state.mainLanguage, state.otherLanguage, state.isPremium, processTranslationResponse, playTranslationAudio]);
+  }, [dispatch, state.mainLanguage, state.otherLanguage, state.isPremium, state.sessionId, processTranslationResponse, playTranslationAudio]);
   
   // Update the translateAudio reference
   translateAudioRef.current = translateAudio;

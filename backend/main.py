@@ -28,6 +28,7 @@ from contextlib import asynccontextmanager
 # --- Project Imports ---
 from .models.conversation import ConversationItem, ConversationSummary, BackendContext, ComprehensiveAudioResult, SyncConversationRequest
 from .db.conversation_db import init_conversation_db, get_conversation_from_db, save_conversation_to_db
+from .services.latency_tracker import audio_latency_tracker
 from .services.in_memory_session_service import in_memory_sessions
 from .services.azure_speech_language_service import AzureSpeechLanguageService
 from .services.gemini_service import (
@@ -632,13 +633,41 @@ async def process_audio(
     main_language: str = Form(...),
     other_language: str = Form(...),
     is_premium: str = Form("false"),
-    session_id: str = Form(None)  # Optional session ID
+    session_id: str = Form(...)  # MANDATORY session ID
 ):
+    # START DETAILED LATENCY TRACKING
+    timing_data = audio_latency_tracker.start_timing()
+    
+    # Initialize tracking variables
+    error_occurred = False
+    is_direct_query = False
+    gemini_input_tokens = 0
+    gemini_output_tokens = 0
+    tts_character_count = 0
+    input_audio_size_bytes = 0
+    input_audio_duration_ms = 0
+    
     try:
-        logger.info(f"Received file: name={file.filename}, content_type={file.content_type}")
+        logger.info(f"Received file: name={file.filename}, content_type={file.content_type}, session_id={session_id}")
+
+        # Session validation - session_id is now mandatory
+        if not session_id or session_id.strip() == "":
+            error_occurred = True
+            logger.error("No session ID provided - this is required for context preservation")
+            raise HTTPException(
+                status_code=400, 
+                detail="Session ID is required for audio processing. Frontend must provide a valid session ID."
+            )
 
         audio_content = await file.read()
         content_type = file.content_type
+        
+        # Capture audio metrics for latency tracking
+        input_audio_size_bytes = len(audio_content)
+        # Rough estimate of audio duration based on file size (for most common audio formats)
+        # This is a rough approximation: assuming ~16kbps average bitrate for OGG/WebM
+        estimated_bitrate_kbps = 16  # Conservative estimate for web audio
+        input_audio_duration_ms = int((input_audio_size_bytes * 8) / (estimated_bitrate_kbps * 1000) * 1000) if input_audio_size_bytes > 0 else 0
 
         # Attempt to infer content type if generic or incorrect
         if content_type == 'application/octet-stream' or not content_type.startswith('audio/'):
@@ -648,15 +677,24 @@ async def process_audio(
         # Convert is_premium string to boolean
         is_premium_bool = is_premium.lower() == "true"
         
-        # Session management
-        if not session_id:
-            # Create new session
-            session_id = in_memory_sessions.create_session(
-                main_language=main_language,
-                other_language=other_language,
-                is_premium=is_premium_bool
-            )
-            logger.info(f"Created new session: {session_id}")
+        # Create session if it doesn't exist (for new sessions)
+        if not in_memory_sessions.sessions.get(session_id):
+            logger.info(f"Creating new session for ID: {session_id}")
+            in_memory_sessions.sessions[session_id] = {
+                "session_id": session_id,
+                "main_language": main_language,
+                "other_language": other_language,
+                "is_premium": is_premium_bool,
+                "created_at": datetime.now(),
+                "last_activity": datetime.now(),
+                "messages": [],
+                "memory_facts": {},
+                "context_references": [],
+                "message_count": 0,
+                "facts_count": 0
+            }
+        else:
+            logger.info(f"Using existing session: {session_id}")
         
         # Build enhanced prompt with session context
         enhanced_system_prompt = in_memory_sessions.build_enhanced_prompt(
@@ -665,6 +703,9 @@ async def process_audio(
             current_text="",  # We'll add the transcription later
             prompt_type="translation"
         )
+
+        # MARK AUDIO PROCESSING START
+        audio_latency_tracker.mark_audio_start(timing_data)
 
         # Use the modular Gemini service for audio processing
         gemini_result = process_audio_with_gemini(
@@ -675,6 +716,16 @@ async def process_audio(
             other_language=other_language,
             is_premium=is_premium_bool
         )
+        
+        # MARK AUDIO PROCESSING END
+        audio_latency_tracker.mark_audio_end(timing_data)
+        
+        # Extract token usage from Gemini response
+        gemini_input_tokens = gemini_result.get("input_tokens", 0)
+        gemini_output_tokens = gemini_result.get("output_tokens", 0)
+        
+        # MARK TRANSLATION PROCESSING START
+        audio_latency_tracker.mark_translation_start(timing_data)
         
         # Handle Gemini service response
         if not gemini_result["success"]:
@@ -730,6 +781,15 @@ async def process_audio(
             logger.error("Using fallback response, skipping Text-to-Speech synthesis.")
             return frontend_fallback  # Return the cleaned fallback JSON immediately
 
+        # Check if it's a direct query for latency tracking
+        is_direct_query = response_json.get("is_direct_query", False)
+        
+        # MARK TRANSLATION PROCESSING END
+        audio_latency_tracker.mark_translation_end(timing_data)
+        
+        # MARK AUDIO SYNTHESIS START
+        audio_latency_tracker.mark_synthesis_start(timing_data)
+
         # --- Perform Text-to-Speech for Translation ---
         translation_text = response_json.get("translation")
         tone = response_json.get("tone", "neutral")
@@ -746,8 +806,17 @@ async def process_audio(
 
         logger.info(f"Processing TTS request, premium status: {is_premium_bool}")
 
+        # MARK AUDIO SYNTHESIS START
+        audio_latency_tracker.mark_synthesis_start(timing_data)
+        
+        # Initialize TTS character tracking
+        tts_character_count = 0
+
         # Synthesize translation audio if present and not a direct query
         if translation_text and translation_language_code != "unknown" and not response_json.get("is_direct_query", False):
+            # Count characters for TTS tracking
+            tts_character_count += len(translation_text)
+            
             try:
                 if is_premium_bool:
                     try:
@@ -793,6 +862,9 @@ async def process_audio(
         if response_json.get("is_direct_query", False) and ai_response.get("answer_in_audio_language"):
             ai_response_text = ai_response["answer_in_audio_language"]
             ai_response_language = response_json.get("audio_language", DEFAULT_TTS_LANGUAGE_CODE)
+            
+            # Count characters for AI response TTS tracking
+            tts_character_count += len(ai_response_text)
             
             # Generate audio for AI response in original language
             try:
@@ -840,6 +912,9 @@ async def process_audio(
             ai_translation_audio_base64 = None
             
             if ai_answer_translated and translation_language_code != "unknown":
+                # Count characters for AI translation TTS tracking
+                tts_character_count += len(ai_answer_translated)
+                
                 try:
                     if is_premium_bool:
                         try:
@@ -952,6 +1027,9 @@ async def process_audio(
         storage_thread.start()
         logger.info(f"🚀 Started enhanced message storage with async fact processing for session {session_id} - response will be sent immediately")
         
+        # MARK AUDIO SYNTHESIS END
+        audio_latency_tracker.mark_synthesis_end(timing_data)
+        
         # Add session ID to response
         response_json["session_id"] = session_id
 
@@ -962,12 +1040,30 @@ async def process_audio(
         return frontend_response # Return the cleaned JSON response
 
     except HTTPException as http_exc:
+        error_occurred = True
         # Catch and re-raise HTTPExceptions
         raise http_exc
     except Exception as e:
+        error_occurred = True
         # Catch any other unexpected errors
         logger.error(f"An unexpected error occurred in the main processing path: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"An internal server error occurred: {str(e)}")
+    
+    finally:
+        # LOG DETAILED LATENCY (always runs)
+        audio_latency_tracker.log_audio_latency(
+            timing_data=timing_data,
+            session_id=session_id or "unknown",
+            audio_language=main_language or "unknown",
+            translation_language=other_language or "unknown",
+            is_direct_query=is_direct_query,
+            error_occurred=error_occurred,
+            gemini_input_tokens=gemini_input_tokens,
+            gemini_output_tokens=gemini_output_tokens,
+            tts_character_count=tts_character_count,
+            input_audio_size_bytes=input_audio_size_bytes,
+            input_audio_duration_ms=input_audio_duration_ms
+        )
 
 @app.get("/available-languages/")
 async def available_languages():
