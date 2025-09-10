@@ -23,7 +23,7 @@ const LanguageControls: React.FC<LanguageControlsProps> = ({
   setPremium,
   swapLanguages 
 }) => (
-  <div className="flex flex-col md:flex-row gap-4 mb-6 items-center">
+  <div className="flex flex-col md:flex-row gap-4 mb-6 items-center language-dropdown">
     <LanguageSelector
       label="Main Language:"
       value={mainLanguage}
@@ -43,7 +43,7 @@ const LanguageControls: React.FC<LanguageControlsProps> = ({
       value={otherLanguage}
       onChange={setOtherLanguage}
     />
-    <div className="flex items-center mt-3 md:mt-6">
+    <div className="flex items-center mt-3 md:mt-6 premium-checkbox">
       <div className="flex items-center space-x-2">
         <input
           type="checkbox"

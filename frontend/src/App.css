@@ -1,8 +1,30 @@
+:root {
+  --background: #000000;
+  --panel-bg: #000000;
+  --conversation-bg: #000000;
+  --accent: #4f8cff;
+  --accent-secondary: #6dd5ed;
+  --success: #34c759;
+  --warning: #ffb300;
+  --error: #ff4d4f;
+  --text-primary: #ffffff;
+  --text-secondary: #e0e0e0;
+  --label: #6db4ff;
+  --bubble-user: #1e293b;
+  --bubble-ai: #222222;
+  --bubble-assistant: #1e2d3d;
+}
+
 #root {
   max-width: 1280px;
   margin: 0 auto;
   padding: 2rem;
   text-align: center;
+}
+
+body, .app-root {
+  background: var(--background) !important;
+  color: var(--text-primary);
 }
 
 .logo {
@@ -39,4 +61,157 @@
 
 .read-the-docs {
   color: #888;
+}
+
+/* --- Modern Conversation & Controls Layout --- */
+.conversation-panel {
+  background: var(--conversation-bg) !important;
+  width: 65%;
+  float: left;
+  height: 100vh;
+  overflow-y: auto;
+  padding: 32px 24px;
+}
+
+.message-bubble {
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 12px;
+  background: #121212;
+  box-shadow: 0 2px 8px rgba(255,255,255,0.1);
+  color: #ffffff;
+  font-weight: 500;
+}
+
+.message-bubble.user {
+  background: var(--bubble-user) !important;
+  color: #ffffff;
+  border: 1px solid #3a7bff;
+}
+
+.message-bubble.ai {
+  background: var(--bubble-ai) !important;
+  color: #e0e0e0;
+  border: 1px solid #444;
+}
+
+.message-bubble.assistant {
+  background: var(--bubble-assistant) !important;
+  color: #a0e4f1;
+  border: 1px solid #2a5d82;
+}
+
+.timestamp {
+  font-size: 0.8em;
+  color: #aaaaaa;
+  margin-top: 4px;
+}
+
+.audio-section {
+  background: #121212 !important;
+  border-radius: 10px;
+  margin-top: 24px;
+  border: 1px solid #333;
+}
+
+.audio-visualizer-wrapper {
+  margin-top: 16px;
+  background: #121212;
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid #333;
+}
+
+.controls-panel {
+  background: var(--panel-bg) !important;
+  width: 35%;
+  float: right;
+  height: 100vh;
+  padding: 32px 24px;
+  box-sizing: border-box;
+}
+
+.controls-panel .audio-visualizer-wrapper {
+  max-width: 90%;
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+  overflow: hidden;
+}
+
+.language-dropdown, .premium-checkbox {
+  margin-bottom: 18px;
+}
+
+.language-dropdown label,
+.premium-checkbox label {
+  color: var(--accent) !important;
+  background: #1a1a1a;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-weight: 500;
+}
+
+.session-button {
+  color: #fff !important;
+  background: var(--accent) !important;
+}
+.session-button:hover {
+  background: #357ae8 !important;
+}
+
+.icon-button {
+  color: var(--accent-secondary);
+}
+
+.recording-label {
+  color: #ffffff !important;
+  background: rgba(79, 140, 255, 0.3);
+  padding: 4px 12px;
+  border-radius: 8px;
+  font-weight: 500;
+  border: 1px solid var(--accent);
+}
+
+/* Button colors for different states */
+.button-success {
+  background: var(--success) !important;
+  color: #fff !important;
+}
+.button-warning {
+  background: var(--warning) !important;
+  color: #fff !important;
+}
+.button-danger {
+  background: var(--error) !important;
+  color: #fff !important;
+}
+
+/* Dropdowns/Inputs */
+select, input[type="text"], input[type="checkbox"] {
+  background: #1a1a1a;
+  border: 1px solid #444;
+  color: var(--text-primary);
+}
+
+/* Responsive: collapse right panel on mobile */
+@media (max-width: 900px) {
+  .controls-panel {
+    display: none;
+  }
+  .hamburger-menu {
+    display: block;
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    font-size: 2em;
+    cursor: pointer;
+  }
 }

@@ -92,7 +92,7 @@ const AudioVisualizer: React.FC<AudioVisualizerProps> = ({ stream, isVisible, an
   if (!isVisible) return null;
   return (
     <div className="w-full flex justify-center my-4">
-      <canvas ref={canvasRef} width={300} height={60} style={{ background: '#222', borderRadius: 8 }} />
+      <canvas ref={canvasRef} width={280} height={60} style={{ background: '#222', borderRadius: 8, maxWidth: '100%' }} />
     </div>
   );
 };

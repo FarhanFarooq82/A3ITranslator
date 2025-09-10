@@ -156,147 +156,125 @@ export const RealTimeTranslatorApp = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-start p-4">
-      <h1 className="text-3xl font-bold mb-6 text-gray-800">A3I Translator</h1>
-
-      {/* Welcome message component */}
-      {showWelcome && (
-        <WelcomeMessage
-          mainLanguage={language.mainLanguage}
-          targetLanguage={language.otherLanguage}
-          isPremium={state.isPremium}
-          onComplete={handleWelcomeComplete}
-          onSkip={handleWelcomeSkip}
-        />
-      )}
-
-      {/* Show conversation history only when session is active */}
-      {viewState.session.showMainUI && (
-        <>
-          {/* Show assistant (direct LLM) response if present */}
-          {assistantResponse && (
-            <div className="mb-4 w-full max-w-xl p-4 bg-yellow-50 border-l-4 border-yellow-400 text-yellow-900 rounded shadow">
-              <div className="font-semibold mb-1">Assistant Response</div>
-              <div>{assistantResponse}</div>
-            </div>
-          )}
-          <ConversationHistory
-            conversation={conversation.conversation}
+    <div className="app-root" style={{ display: 'flex', minHeight: '100vh', background: '#f7f7fa' }}>
+      {/* Left: Conversation Panel */}
+      <div className="conversation-panel">
+        <h1 className="text-3xl font-bold mb-6 text-gray-800">A3I Translator</h1>
+        {showWelcome && (
+          <WelcomeMessage
             mainLanguage={language.mainLanguage}
-            conversationEndRef={conversationEndRef}
+            targetLanguage={language.otherLanguage}
+            isPremium={state.isPremium}
+            onComplete={handleWelcomeComplete}
+            onSkip={handleWelcomeSkip}
           />
-        </>
-      )}
-      {viewState.session.showConfirmDialog ? (
-        <SessionDialog onCancel={session.cancelEndConfirmation} onConfirm={session.confirmEndSession} />
-      ) : !showWelcome && (
-        <>
-          {/* Show Stop Session button when session is active */}
-          {viewState.session.showStopButton && (
-            <div className="w-full flex justify-end mb-2">
-              <Button onClick={session.showEndConfirmation} variant="destructive" size="sm">
+        )}
+        {viewState.session.showMainUI && (
+          <>
+            {assistantResponse && (
+              <div className="mb-4 w-full max-w-xl p-4 bg-yellow-50 border-l-4 border-yellow-400 text-yellow-900 rounded shadow">
+                <div className="font-semibold mb-1">Assistant Response</div>
+                <div>{assistantResponse}</div>
+              </div>
+            )}
+            <ConversationHistory
+              conversation={conversation.conversation}
+              mainLanguage={language.mainLanguage}
+              conversationEndRef={conversationEndRef}
+            />
+          </>
+        )}
+        <div ref={conversationEndRef} />
+      </div>
+      {/* Right: Controls Panel */}
+      <div className="controls-panel">
+        {viewState.session.showConfirmDialog ? (
+          <SessionDialog onCancel={session.cancelEndConfirmation} onConfirm={session.confirmEndSession} />
+        ) : !showWelcome && (
+          <>
+            {viewState.session.showStopButton && (
+              <Button onClick={session.showEndConfirmation} className="session-button">
                 Stop Session
               </Button>
-            </div>
-          )}
-
-          {/* Resume Session button (when active but not recording) */}
-          {viewState.recording.showResumeButton && (
-            <div className="w-full flex justify-end mb-2">
+            )}
+            {viewState.recording.showResumeButton && (
               <Button
                 onClick={recording.resumeSessionRecording}
-                variant="default"
-                size="sm"
+                className="session-button"
                 title="Resume recording after browser restart or interruption"
               >
                 Resume Recording
               </Button>
-            </div>
-          )}
-
-          {/* Unpause button when session is paused */}
-          {viewState.recording.showResumeFromPause && (
-            <div className="w-full flex justify-end mb-2">
+            )}
+            {viewState.recording.showResumeFromPause && (
               <Button
                 onClick={recording.resumeRecording}
-                variant="default"
-                size="sm"
+                className="session-button"
                 title="Continue recording after being paused"
               >
                 Unpause Recording
               </Button>
-            </div>
-          )}
-
-          {/* Language selection controls - always visible */}
-          <LanguageControls
-            mainLanguage={language.mainLanguage}
-            setMainLanguage={language.setMainLanguage}
-            otherLanguage={language.otherLanguage}
-            setOtherLanguage={language.setOtherLanguage}
-            isPremium={language.isPremium}
-            setPremium={language.setPremium}
-            swapLanguages={language.swapLanguages}
-          />
-
-          {/* Start Session button - only shown on landing page */}
-          {viewState.session.showStartButton && (
-            <div className="mb-4">
+            )}
+            <LanguageControls
+              mainLanguage={language.mainLanguage}
+              setMainLanguage={language.setMainLanguage}
+              otherLanguage={language.otherLanguage}
+              setOtherLanguage={language.setOtherLanguage}
+              isPremium={language.isPremium}
+              setPremium={language.setPremium}
+              swapLanguages={language.swapLanguages}
+            />
+            {viewState.session.showStartButton && (
               <Button
                 type="button"
                 onClick={startSessionWithCountdown}
-                size="lg"
-                className="px-8 py-6 text-lg"
+                className="session-button"
               >
                 Start Session
               </Button>
-            </div>
-          )}
-
-          {/* Only show the following elements when session is active */}
-          {viewState.session.showMainUI && (
-            <>
-              {/* Status display showing errors or current status */}
-              <StatusDisplay
-                status={state.statusMessage}
-                silenceCountdown={state.silenceCountdown}
-                error={state.error}
-              />
-
-              {/* Recording control buttons */}
-              <RecordingControls
-                showPause={viewState.recording.showPauseButton}
-                showUnpause={viewState.recording.showUnpauseButton}
-                showClearRestart={viewState.recording.showRestartButton}
-                isRecording={state.operationState === OperationState.RECORDING}
-                isPaused={state.sessionState === SessionState.PAUSED}
-                handlePause={recording.pauseRecording}
-                handleUnpause={recording.resumeRecording}
-                handleClearRestart={handleClearRestart}
-                handleManualTranslate={handleManualTranslate}
-              />
-
-              {/* Audio visualizer */}
-              {viewState.recording.showVisualizer && (
-                <AudioVisualizer
-                  stream={null}
-                  isVisible={true}
-                  analyserNode={state.analyserNode}
+            )}
+            {viewState.session.showMainUI && (
+              <>
+                <StatusDisplay
+                  status={state.statusMessage}
+                  silenceCountdown={state.silenceCountdown}
+                  error={state.error}
                 />
-              )}
-
-              {/* Translation display */}
-              <TranslationDisplay
-                audioUrl={state.lastAudioUrl}
-                translation={state.lastTranslation}
-                isPlaying={state.operationState === OperationState.PLAYING}
-              />
-            </>
-          )}
-        </>
-      )}
-
-      <div ref={conversationEndRef} />
+                <RecordingControls
+                  showPause={viewState.recording.showPauseButton}
+                  showUnpause={viewState.recording.showUnpauseButton}
+                  showClearRestart={viewState.recording.showRestartButton}
+                  isRecording={state.operationState === OperationState.RECORDING}
+                  isPaused={state.sessionState === SessionState.PAUSED}
+                  handlePause={recording.pauseRecording}
+                  handleUnpause={recording.resumeRecording}
+                  handleClearRestart={handleClearRestart}
+                  handleManualTranslate={handleManualTranslate}
+                />
+                {viewState.recording.showVisualizer && (
+                  <div className="audio-visualizer-wrapper">
+                    <AudioVisualizer
+                      stream={null}
+                      isVisible={true}
+                      analyserNode={state.analyserNode}
+                    />
+                  </div>
+                )}
+                <div className="audio-section">
+                  <TranslationDisplay
+                    audioUrl={state.lastAudioUrl}
+                    translation={state.lastTranslation}
+                    isPlaying={state.operationState === OperationState.PLAYING}
+                  />
+                </div>
+                {state.sessionState === SessionState.ACTIVE && (
+                  <div className="recording-label">Recording...</div>
+                )}
+              </>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 };

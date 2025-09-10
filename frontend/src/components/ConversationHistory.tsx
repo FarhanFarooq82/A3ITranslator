@@ -134,20 +134,7 @@ const ConversationHistory: React.FC<ConversationHistoryProps> = ({ conversation,
   };
   
   return (
-    <div
-      className="mb-4 w-full max-w-xl border rounded-lg shadow-sm bg-white flex flex-col justify-end"
-      style={{
-        height: '22em',
-        minHeight: '22em',
-        maxHeight: '22em',
-        overflowY: 'hidden',
-        fontSize: '0.95rem',
-        fontFamily: 'system-ui, sans-serif',
-        padding: '0.8em 1em',
-        background: '#f9fafb',
-        borderColor: '#e5e7eb',
-      }}
-    >
+    <div className="conversation-panel" style={{height: '22em', minHeight: '22em', maxHeight: '22em', overflowY: 'hidden', fontSize: '0.95rem', fontFamily: 'system-ui, sans-serif', padding: '0.8em 1em'}}>
       <div className="mb-2 p-2 bg-gray-50 rounded-md border border-gray-100 text-xs flex flex-wrap gap-4">
         {legend.map((item, idx) => (
           <div key={idx} style={{ color: item.color }} className="whitespace-nowrap font-medium flex items-center">
@@ -224,31 +211,14 @@ const ConversationHistory: React.FC<ConversationHistoryProps> = ({ conversation,
             
             return (
               <React.Fragment key={group.id}>
-                <div style={{
-                  color,
-                  margin: '0.6em 0',
-                  padding: '0.8em 1em',
-                  backgroundColor,
-                  borderRadius: '0.8rem',
-                  borderTopLeftRadius: alignment === 'flex-start' ? '0' : '0.8rem',
-                  borderTopRightRadius: alignment === 'flex-start' ? '0.8rem' : '0',
-                  whiteSpace: 'pre-line',
-                  wordBreak: 'break-word',
-                  maxWidth: '85%',
-                  alignSelf: alignment,
-                  boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05)',
-                  borderLeft: alignment === 'flex-start' ? `3px solid ${color}` : 'none',
-                  borderRight: alignment === 'flex-start' ? 'none' : `3px solid ${color}`
-                }}>
+                <div className={`message-bubble${isMainLanguage ? ' user' : ' ai'}`} style={{color, backgroundColor, alignSelf: alignment}}>
                   <div className="flex justify-between mb-1">
                     <span style={{fontSize:'0.8em', color:'#6b7280', fontWeight: 'bold'}}>
                       {hasAIResponse ? '🤖' : hasQuestion ? '❓' : '🎤'} {languageName}
                       {hasAIResponse && ' (AI Assistant)'}
                       {hasQuestion && !hasAIResponse && ' (Question)'}
                     </span>
-                    <span style={{fontSize:'0.8em', color:'#6b7280'}}>
-                      {formatToLocalTime(group.timestamp)}
-                    </span>
+                    <span className="timestamp">{formatToLocalTime(group.timestamp)}</span>
                   </div>
                   
                   {/* Enhanced message rendering with question and AI response support */}

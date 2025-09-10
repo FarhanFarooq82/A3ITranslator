@@ -7,7 +7,7 @@ interface TranslationDisplayProps {
 }
 
 export const TranslationDisplay: React.FC<TranslationDisplayProps> = ({ audioUrl, translation, isPlaying }) => (
-  <div className="space-y-4">
+  <div className="audio-section space-y-4">
     {(audioUrl || isPlaying) && (
       <>
         <div>
