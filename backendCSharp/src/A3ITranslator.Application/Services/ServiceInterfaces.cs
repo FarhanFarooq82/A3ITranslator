@@ -1,7 +1,4 @@
 using A3ITranslator.Application.Common;
-using A3ITranslator.Application.DTOs;
-using A3ITranslator.Domain.Enums;
-using A3ITranslator.Domain.ValueObjects;
 
 namespace A3ITranslator.Application.Services;
 
@@ -10,74 +7,25 @@ namespace A3ITranslator.Application.Services;
 /// </summary>
 public interface ISTTService
 {
-    STTProvider ProviderType { get; }
-    Task<Result<STTResponseDto>> TranscribeAsync(STTRequestDto request);
-    Task<bool> IsHealthyAsync();
-}
-
-/// <summary>
-/// STT request DTO
-/// </summary>
-public class STTRequestDto
-{
-    public byte[] AudioData { get; set; } = Array.Empty<byte>();
-    public string SessionId { get; set; } = string.Empty;
-    public string ContentType { get; set; } = "audio/ogg";
-    public string ExpectedLanguage { get; set; } = string.Empty;
-}
-
-/// <summary>
-/// STT response DTO
-/// </summary>
-public class STTResponseDto
-{
-    public string Transcription { get; set; } = string.Empty;
-    public string DetectedLanguage { get; set; } = string.Empty;
-    public float Confidence { get; set; }
-    public SpeakerDto? Speaker { get; set; }
-    public string Provider { get; set; } = string.Empty;
-    public TimeSpan ProcessingTime { get; set; }
-}
-
-/// <summary>
-/// Translation service interface
-/// </summary>
-public interface ITranslationService
-{
-    AIProvider ProviderType { get; }
-    Task<Result<TranslationResponseDto>> TranslateAsync(TranslationRequestDto request);
-    Task<bool> IsHealthyAsync();
-}
-
-/// <summary>
-/// Translation request DTO
-/// </summary>
-public class TranslationRequestDto
-{
-    public string Text { get; set; } = string.Empty;
-    public string SourceLanguage { get; set; } = string.Empty;
-    public string TargetLanguage { get; set; } = string.Empty;
-    public string SessionId { get; set; } = string.Empty;
-    public SpeakerDto? Speaker { get; set; }
-    public UserTier UserTier { get; set; }
-}
-
-/// <summary>
-/// Translation response DTO
-/// </summary>
-public class TranslationResponseDto
-{
-    public string Translation { get; set; } = string.Empty;
-    public string Tone { get; set; } = string.Empty;
-    public string TranslationWithGestures { get; set; } = string.Empty;
-    public bool AIAssistanceConfirmed { get; set; }
-    public AIResponseDto? AIResponse { get; set; }
-    public string? AIResponseTranslated { get; set; }
-    public string? AIResponseWithGestures { get; set; }
-    public float AIConfidence { get; set; }
-    public string? AIExpertiseArea { get; set; }
-    public string Provider { get; set; } = string.Empty;
-    public TimeSpan ProcessingTime { get; set; }
+    /// <summary>
+    /// Get supported languages for this STT service
+    /// </summary>
+    Dictionary<string, string> GetSupportedLanguages();
+    
+    /// <summary>
+    /// Get the service name for identification
+    /// </summary>
+    string GetServiceName();
+    
+    /// <summary>
+    /// Convert speech to text
+    /// </summary>
+    Task<Result<string>> ConvertSpeechToTextAsync(byte[] audioData, string languageCode, string sessionId);
+    
+    /// <summary>
+    /// Check if the service is healthy and available
+    /// </summary>
+    Task<bool> CheckHealthAsync();
 }
 
 /// <summary>
@@ -85,36 +33,52 @@ public class TranslationResponseDto
 /// </summary>
 public interface ITTSService
 {
-    TTSProvider ProviderType { get; }
-    Task<Result<TTSResponseDto>> GenerateSpeechAsync(TTSRequestDto request);
-    Task<bool> IsHealthyAsync();
+    /// <summary>
+    /// Get supported languages for this TTS service
+    /// </summary>
+    Dictionary<string, string> GetSupportedLanguages();
+    
+    /// <summary>
+    /// Get the service name for identification
+    /// </summary>
+    string GetServiceName();
+    
+    /// <summary>
+    /// Convert text to speech
+    /// </summary>
+    Task<Result<byte[]>> ConvertTextToSpeechAsync(string text, string languageCode, string sessionId);
+    
+    /// <summary>
+    /// Check if the service is healthy and available
+    /// </summary>
+    Task<bool> CheckHealthAsync();
 }
 
 /// <summary>
-/// TTS request DTO
+/// GenAI service interface for prompt/response with AI models
+/// Supports Azure Copilot, Gemini, OpenAI GPT, etc.
 /// </summary>
-public class TTSRequestDto
+public interface IGenAIService
 {
-    public string Text { get; set; } = string.Empty;
-    public string TargetLanguage { get; set; } = string.Empty;
-    public SpeakerDto? Speaker { get; set; }
-    public UserTier UserTier { get; set; }
-    public string SessionId { get; set; } = string.Empty;
-    public ContentType ContentType { get; set; } = ContentType.Translation;
+    /// <summary>
+    /// Get the service name for identification
+    /// </summary>
+    string GetServiceName();
+    
+    /// <summary>
+    /// Send prompt to AI model and get response
+    /// </summary>
+    Task<Result<string>> SendPromptAsync(string prompt, string language, string sessionId);
+    
+    /// <summary>
+    /// Check if the service is healthy and available
+    /// </summary>
+    Task<bool> CheckHealthAsync();
+    
+    /// <summary>
+    /// Get supported capabilities of this GenAI service
+    /// </summary>
+    Dictionary<string, bool> GetCapabilities();
 }
 
-/// <summary>
-/// TTS response DTO
-/// </summary>
-public class TTSResponseDto
-{
-    public byte[] AudioData { get; set; } = Array.Empty<byte>();
-    public string MimeType { get; set; } = "audio/mpeg";
-    public string Provider { get; set; } = string.Empty;
-    public string? VoiceUsed { get; set; }
-    public VoiceQuality Quality { get; set; }
-    public TimeSpan ProcessingTime { get; set; }
-    public bool WasCached { get; set; }
-
-    public string ToBase64() => Convert.ToBase64String(AudioData);
-}
+// Language service interface moved to separate ILanguageService.cs file

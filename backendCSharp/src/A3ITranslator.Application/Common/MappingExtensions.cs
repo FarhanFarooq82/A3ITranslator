@@ -1,5 +1,5 @@
-using A3ITranslator.Application.DTOs;
-using A3ITranslator.Application.Services;
+using A3ITranslator.Application.DTOs.Session;
+using A3ITranslator.Application.DTOs.Speaker;
 using A3ITranslator.Domain.Entities;
 using A3ITranslator.Domain.ValueObjects;
 
@@ -21,7 +21,7 @@ public static class MappingExtensions
             UserId = session.UserId,
             MainLanguage = session.MainLanguage.Code,
             OtherLanguage = session.OtherLanguage.Code,
-            UserTier = session.UserTier,
+            RequestType = session.UserTier,
             State = session.State,
             CreatedAt = session.CreatedAt,
             LastActivity = session.LastActivity,
@@ -33,9 +33,9 @@ public static class MappingExtensions
     /// <summary>
     /// Convert SpeakerInfo value object to SpeakerDto
     /// </summary>
-    public static SpeakerDto ToDto(this Domain.ValueObjects.SpeakerInfo speakerInfo)
+    public static DTOs.Speaker.SpeakerDto ToDto(this Domain.ValueObjects.SpeakerInfo speakerInfo)
     {
-        return new SpeakerDto
+        return new DTOs.Speaker.SpeakerDto
         {
             SpeakerId = speakerInfo.SpeakerId,
             SpeakerName = speakerInfo.SpeakerName,
@@ -51,7 +51,7 @@ public static class MappingExtensions
     /// <summary>
     /// Convert SpeakerDto to SpeakerInfo value object
     /// </summary>
-    public static Domain.ValueObjects.SpeakerInfo ToValueObject(this SpeakerDto dto)
+    public static Domain.ValueObjects.SpeakerInfo ToValueObject(this DTOs.Speaker.SpeakerDto dto)
     {
         return new Domain.ValueObjects.SpeakerInfo(
             dto.SpeakerId,
@@ -67,9 +67,9 @@ public static class MappingExtensions
     /// <summary>
     /// Convert SpeakerProfile entity to SpeakerDto
     /// </summary>
-    public static SpeakerDto ToDto(this SpeakerProfile profile)
+    public static DTOs.Speaker.SpeakerDto ToDto(this SpeakerProfile profile)
     {
-        return new SpeakerDto
+        return new DTOs.Speaker.SpeakerDto
         {
             SpeakerId = profile.ExternalSpeakerId,
             SpeakerName = profile.Name,

@@ -21,7 +21,7 @@ public class AzureSTTServiceHealthCheck : IHealthCheck
     {
         try
         {
-            var isHealthy = await _service.IsHealthyAsync();
+            var isHealthy = await _service.CheckHealthAsync();
             
             return isHealthy 
                 ? HealthCheckResult.Healthy("Azure STT Service is healthy")
@@ -30,35 +30,6 @@ public class AzureSTTServiceHealthCheck : IHealthCheck
         catch (Exception ex)
         {
             return HealthCheckResult.Unhealthy("Azure STT Service health check failed", ex);
-        }
-    }
-}
-
-/// <summary>
-/// Health check for Azure Translation Service
-/// </summary>
-public class AzureTranslationServiceHealthCheck : IHealthCheck
-{
-    private readonly AzureTranslationService _service;
-
-    public AzureTranslationServiceHealthCheck(IOptions<ServiceOptions> options, ILogger<AzureTranslationService> logger)
-    {
-        _service = new AzureTranslationService(options, logger);
-    }
-
-    public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            var isHealthy = await _service.IsHealthyAsync();
-            
-            return isHealthy 
-                ? HealthCheckResult.Healthy("Azure Translation Service is healthy")
-                : HealthCheckResult.Unhealthy("Azure Translation Service configuration is invalid");
-        }
-        catch (Exception ex)
-        {
-            return HealthCheckResult.Unhealthy("Azure Translation Service health check failed", ex);
         }
     }
 }
@@ -79,7 +50,7 @@ public class AzureTTSServiceHealthCheck : IHealthCheck
     {
         try
         {
-            var isHealthy = await _service.IsHealthyAsync();
+            var isHealthy = await _service.CheckHealthAsync();
             
             return isHealthy 
                 ? HealthCheckResult.Healthy("Azure TTS Service is healthy")

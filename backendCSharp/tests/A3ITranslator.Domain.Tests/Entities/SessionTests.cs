@@ -13,7 +13,7 @@ public class SessionTests
         var userId = "user123";
         var mainLanguage = LanguageInfo.English;
         var otherLanguage = LanguageInfo.Arabic;
-        var userTier = UserTier.Premium;
+        var userTier = RequestType.Premium;
 
         // Act
         var session = new Session(userId, mainLanguage, otherLanguage, userTier);
@@ -37,7 +37,7 @@ public class SessionTests
     {
         // Arrange & Act & Assert
         Assert.Throws<ArgumentException>(() =>
-            new Session(null!, LanguageInfo.English, LanguageInfo.Arabic, UserTier.Standard));
+            new Session(null!, LanguageInfo.English, LanguageInfo.Arabic, RequestType.Standard));
     }
 
     [Fact]
@@ -45,7 +45,7 @@ public class SessionTests
     {
         // Arrange & Act & Assert
         Assert.Throws<ArgumentNullException>(() =>
-            new Session("user123", null!, LanguageInfo.Arabic, UserTier.Standard));
+            new Session("user123", null!, LanguageInfo.Arabic, RequestType.Standard));
     }
 
     [Fact]
@@ -183,7 +183,7 @@ public class SessionTests
             "user123",
             LanguageInfo.English,
             LanguageInfo.Arabic,
-            UserTier.Standard,
+            RequestType.Standard,
             TimeSpan.FromMilliseconds(1)); // Very short timeout
 
         // Act & Assert
@@ -214,6 +214,6 @@ public class SessionTests
 
     private static Session CreateTestSession()
     {
-        return new Session("user123", LanguageInfo.English, LanguageInfo.Arabic, UserTier.Standard);
+        return new Session("user123", LanguageInfo.English, LanguageInfo.Arabic, RequestType.Standard);
     }
 }

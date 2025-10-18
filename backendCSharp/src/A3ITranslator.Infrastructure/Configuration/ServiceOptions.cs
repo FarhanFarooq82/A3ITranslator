@@ -46,6 +46,22 @@ public class OpenAIOptions
 }
 
 /// <summary>
+/// Configuration options for Google Cloud services
+/// Following Google Cloud SDK patterns
+/// </summary>
+public class GoogleOptions
+{
+    public const string SectionName = "Google";
+    
+    [Required]
+    public string CredentialsPath { get; set; } = string.Empty;
+    
+    public string ProjectId { get; set; } = string.Empty;
+    
+    public string Location { get; set; } = "global";
+}
+
+/// <summary>
 /// Configuration options for Gemini AI services
 /// Following Google AI SDK patterns
 /// </summary>
@@ -71,6 +87,8 @@ public class ServiceOptions
     
     public AzureOptions Azure { get; set; } = new();
     
+    public GoogleOptions Google { get; set; } = new();
+    
     public OpenAIOptions OpenAI { get; set; } = new();
     
     public GeminiOptions Gemini { get; set; } = new();
@@ -82,10 +100,10 @@ public class ServiceOptions
     public string[] STTProviderPriority { get; set; } = { "Azure", "OpenAI" };
     
     /// <summary>
-    /// Provider priority for Translation services: Gemini -> OpenAI -> Azure
-    /// Optimized for cost efficiency per architecture docs
+    /// Provider priority for GenAI services: OpenAI -> Gemini -> Azure
+    /// Optimized for response quality and cost efficiency
     /// </summary>
-    public string[] TranslationProviderPriority { get; set; } = { "Gemini", "OpenAI", "Azure" };
+    public string[] GenAIProviderPriority { get; set; } = { "OpenAI", "Gemini", "Azure" };
     
     /// <summary>
     /// Provider priority for TTS services: Azure (primary)

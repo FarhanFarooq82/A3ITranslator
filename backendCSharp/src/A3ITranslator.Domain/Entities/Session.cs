@@ -17,7 +17,7 @@ public class Session : BaseEntity
     public string UserId { get; private set; }
     public LanguageInfo MainLanguage { get; private set; }
     public LanguageInfo OtherLanguage { get; private set; }
-    public UserTier UserTier { get; private set; }
+    public RequestType UserTier { get; private set; }
     public SessionState State { get; private set; }
     public DateTime LastActivity { get; private set; }
     public DateTime? ExpiresAt { get; private set; }
@@ -38,7 +38,7 @@ public class Session : BaseEntity
         string userId,
         LanguageInfo mainLanguage,
         LanguageInfo otherLanguage,
-        UserTier userTier,
+        RequestType userTier,
         TimeSpan? sessionTimeout = null)
     {
         if (string.IsNullOrWhiteSpace(userId))

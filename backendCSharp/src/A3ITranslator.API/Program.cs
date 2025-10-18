@@ -1,16 +1,39 @@
 using Microsoft.Extensions.Logging;
+using A3ITranslator.Application.Services;
+using A3ITranslator.Infrastructure.Services.Azure;
+using A3ITranslator.Infrastructure.Services.Google;
+using A3ITranslator.Infrastructure.Services.OpenAI;
+using A3ITranslator.Infrastructure.Services.GenAI;
+using A3ITranslator.Infrastructure.Configuration;
 
-// Step 1: Basic Program.cs for endpoint testing
-// Minimal setup without complex dependencies
+// A3I Translator API with comprehensive multi-provider language service support
+// Registers all provider services and LanguageService with union logic
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Step 1: Basic services only
+// Configuration
+builder.Services.Configure<ServiceOptions>(
+    builder.Configuration.GetSection("Services"));
+
+// Core services
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// Step 1: Basic CORS for frontend testing
+// Register ALL STT services as ISTTService for language aggregation
+builder.Services.AddTransient<ISTTService, AzureSTTService>();
+builder.Services.AddTransient<ISTTService, GoogleSTTService>();
+builder.Services.AddTransient<ISTTService, OpenAISTTService>();
+
+// Register GenAI services (replacing translation services)
+builder.Services.AddTransient<IGenAIService, AzureGenAIService>();
+builder.Services.AddTransient<IGenAIService, GeminiGenAIService>();
+builder.Services.AddTransient<IGenAIService, OpenAIGenAIService>();
+
+// Language aggregation service with all providers - SINGLETON for caching
+builder.Services.AddSingleton<ILanguageService, LanguageService>();
+
+// CORS for frontend testing
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
@@ -21,14 +44,14 @@ builder.Services.AddCors(options =>
     });
 });
 
-// Step 1: Basic logging
+// Logging
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
 builder.Logging.SetMinimumLevel(LogLevel.Information);
 
 var app = builder.Build();
 
-// Step 1: Basic middleware pipeline
+// Middleware pipeline
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -38,13 +61,17 @@ if (app.Environment.IsDevelopment())
 app.UseCors("AllowAll");
 app.MapControllers();
 
-// Step 1: Basic startup message
+// Startup message
 var logger = app.Services.GetRequiredService<ILogger<Program>>();
-logger.LogInformation("=== STEP 1: A3I Translator API Starting ===");
+logger.LogInformation("=== A3I Translator API Starting ===");
 logger.LogInformation("Available endpoints:");
-logger.LogInformation("- GET  /available-languages (Languages list)");
-logger.LogInformation("- POST /process-audio (Audio processing - basic validation only)");
-logger.LogInformation("- Swagger UI: http://localhost:5000/swagger");
-logger.LogInformation("=== STEP 1: Ready for endpoint testing ===");
+logger.LogInformation("- GET  /languages/all (All supported languages)");
+logger.LogInformation("- GET  /languages/stt (STT languages)");
+logger.LogInformation("- GET  /languages/tts (TTS languages)");
+logger.LogInformation("- GenAI services available (Azure OpenAI, Gemini, OpenAI GPT)");
+logger.LogInformation("- GET  /languages/common (Common languages)");
+logger.LogInformation("- POST /process-audio (Audio processing)");
+logger.LogInformation("- Swagger UI: http://localhost:8000/swagger");
+logger.LogInformation("=== A3I Translator API Ready ===");
 
 app.Run();

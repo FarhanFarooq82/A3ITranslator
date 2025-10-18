@@ -3,7 +3,7 @@ namespace A3ITranslator.Domain.Enums;
 /// <summary>
 /// Supported user tiers for service differentiation
 /// </summary>
-public enum UserTier
+public enum RequestType
 {
     Standard = 0,
     Premium = 1

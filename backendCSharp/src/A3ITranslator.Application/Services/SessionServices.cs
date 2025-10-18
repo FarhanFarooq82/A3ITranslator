@@ -1,5 +1,6 @@
 using A3ITranslator.Application.Common;
-using A3ITranslator.Application.DTOs;
+using A3ITranslator.Application.DTOs.Session;
+using A3ITranslator.Application.DTOs.Speaker;
 using A3ITranslator.Domain.Entities;
 using A3ITranslator.Domain.Enums;
 
@@ -19,30 +20,6 @@ public interface ISessionService
     Task<Result<SpeakerDto>> GetSpeakerInfoAsync(string sessionId, string speakerId);
     Task<Result> EndSessionAsync(string sessionId);
     Task<Result> CleanupExpiredSessionsAsync();
-}
-
-/// <summary>
-/// Create session request DTO
-/// </summary>
-public class CreateSessionDto
-{
-    public string UserId { get; set; } = string.Empty;
-    public string MainLanguage { get; set; } = string.Empty;
-    public string OtherLanguage { get; set; } = string.Empty;
-    public UserTier UserTier { get; set; } = UserTier.Standard;
-    public TimeSpan? SessionTimeout { get; set; }
-}
-
-/// <summary>
-/// Add message to session DTO
-/// </summary>
-public class AddMessageDto
-{
-    public string Speaker { get; set; } = string.Empty;
-    public string Text { get; set; } = string.Empty;
-    public string Language { get; set; } = string.Empty;
-    public MessageType MessageType { get; set; }
-    public SpeakerDto? SpeakerInfo { get; set; }
 }
 
 /// <summary>

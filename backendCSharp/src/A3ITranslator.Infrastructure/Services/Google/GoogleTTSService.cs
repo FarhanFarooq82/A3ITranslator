@@ -4,18 +4,18 @@ using A3ITranslator.Infrastructure.Configuration;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Logging;
 
-namespace A3ITranslator.Infrastructure.Services.Azure;
+namespace A3ITranslator.Infrastructure.Services.Google;
 
 /// <summary>
-/// Azure Text-to-Speech service implementation
+/// Google Text-to-Speech service implementation
 /// Implements exact language dictionary from IMPLEMENTATION.md
 /// </summary>
-public class AzureTTSService : ITTSService
+public class GoogleTTSService : ITTSService
 {
     private readonly ServiceOptions _options;
-    private readonly ILogger<AzureTTSService> _logger;
+    private readonly ILogger<GoogleTTSService> _logger;
 
-    public AzureTTSService(IOptions<ServiceOptions> options, ILogger<AzureTTSService> logger)
+    public GoogleTTSService(IOptions<ServiceOptions> options, ILogger<GoogleTTSService> logger)
     {
         _options = options.Value;
         _logger = logger;
@@ -26,7 +26,7 @@ public class AzureTTSService : ITTSService
     /// </summary>
     public Dictionary<string, string> GetSupportedLanguages()
     {
-        return AzureTTSLanguages;
+        return GoogleTTSLanguages;
     }
 
     /// <summary>
@@ -34,7 +34,7 @@ public class AzureTTSService : ITTSService
     /// </summary>
     public string GetServiceName()
     {
-        return "Azure Text-to-Speech";
+        return "Google Text-to-Speech";
     }
 
     /// <summary>
@@ -55,56 +55,40 @@ public class AzureTTSService : ITTSService
         try
         {
             await Task.Delay(10);
-            var hasConfig = !string.IsNullOrEmpty(_options.Azure?.SpeechKey);
-            _logger.LogDebug("Azure TTS health check: {Status}", hasConfig ? "Healthy" : "Unhealthy");
+            var hasConfig = !string.IsNullOrEmpty(_options.Google?.CredentialsPath);
+            _logger.LogDebug("Google TTS health check: {Status}", hasConfig ? "Healthy" : "Unhealthy");
             return hasConfig;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Azure TTS health check failed");
+            _logger.LogError(ex, "Google TTS health check failed");
             return false;
         }
     }
 
     /// <summary>
-    /// Azure TTS Languages - EXACT dictionary from IMPLEMENTATION.md
-    /// Matches STT languages with high-quality voices
+    /// Google TTS Languages - EXACT dictionary from IMPLEMENTATION.md
+    /// WaveNet and Neural2 voice support
     /// </summary>
-    public static readonly Dictionary<string, string> AzureTTSLanguages = new()
+    public static readonly Dictionary<string, string> GoogleTTSLanguages = new()
     {
-        // Tier 1 - Primary supported languages with neural voices
+        // Tier 1 - Primary supported languages with WaveNet/Neural2 voices
         {"en-US", "English (United States)"},
         {"en-GB", "English (United Kingdom)"},
         {"en-AU", "English (Australia)"},
         {"en-CA", "English (Canada)"},
         {"en-IN", "English (India)"},
         
-        // Urdu - Azure's neural voice strength
+        // Urdu - Available voice support
         {"ur-IN", "Urdu (India)"},
-        {"ur-PK", "Urdu (Pakistan)"},
         
-        // Arabic variants - Azure extensive neural voice support
-        {"ar-SA", "Arabic (Saudi Arabia)"},
-        {"ar-EG", "Arabic (Egypt)"},
-        {"ar-AE", "Arabic (United Arab Emirates)"},
-        {"ar-QA", "Arabic (Qatar)"},
-        {"ar-KW", "Arabic (Kuwait)"},
-        {"ar-BH", "Arabic (Bahrain)"},
-        {"ar-OM", "Arabic (Oman)"},
-        {"ar-JO", "Arabic (Jordan)"},
-        {"ar-LB", "Arabic (Lebanon)"},
-        {"ar-SY", "Arabic (Syria)"},
-        {"ar-IQ", "Arabic (Iraq)"},
-        {"ar-YE", "Arabic (Yemen)"},
-        {"ar-LY", "Arabic (Libya)"},
-        {"ar-TN", "Arabic (Tunisia)"},
-        {"ar-DZ", "Arabic (Algeria)"},
-        {"ar-MA", "Arabic (Morocco)"},
+        // Arabic - Selected major variants with voice support
+        {"ar-XA", "Arabic (Multi-region)"},
         
-        // Major world languages with neural voices
+        // Major world languages - Google's WaveNet strength
         {"zh-CN", "Chinese (Mandarin, Simplified)"},
-        {"zh-TW", "Chinese (Taiwanese Mandarin, Traditional)"},
-        {"zh-HK", "Chinese (Cantonese, Traditional)"},
+        {"zh-TW", "Chinese (Traditional)"},
+        {"yue-HK", "Chinese (Cantonese, Hong Kong)"},
         {"hi-IN", "Hindi (India)"},
         {"es-ES", "Spanish (Spain)"},
         {"es-MX", "Spanish (Mexico)"},
@@ -119,7 +103,7 @@ public class AzureTTSService : ITTSService
         {"pt-PT", "Portuguese (Portugal)"},
         {"ru-RU", "Russian (Russia)"},
         
-        // Additional Azure neural voice languages
+        // European languages with quality voices
         {"nl-NL", "Dutch (Netherlands)"},
         {"sv-SE", "Swedish (Sweden)"},
         {"da-DK", "Danish (Denmark)"},
@@ -129,10 +113,14 @@ public class AzureTTSService : ITTSService
         {"cs-CZ", "Czech (Czech Republic)"},
         {"hu-HU", "Hungarian (Hungary)"},
         {"tr-TR", "Turkish (Turkey)"},
+        {"el-GR", "Greek (Greece)"},
+        
+        // Asian languages with voice support
         {"th-TH", "Thai (Thailand)"},
         {"vi-VN", "Vietnamese (Vietnam)"},
         {"id-ID", "Indonesian (Indonesia)"},
         {"ms-MY", "Malay (Malaysia)"},
+        {"fil-PH", "Filipino (Philippines)"},
         {"ta-IN", "Tamil (India)"},
         {"te-IN", "Telugu (India)"},
         {"kn-IN", "Kannada (India)"},
@@ -140,6 +128,25 @@ public class AzureTTSService : ITTSService
         {"gu-IN", "Gujarati (India)"},
         {"mr-IN", "Marathi (India)"},
         {"bn-IN", "Bengali (India)"},
-        {"pa-IN", "Punjabi (India)"}
+        
+        // Additional languages with voice support
+        {"he-IL", "Hebrew (Israel)"},
+        {"uk-UA", "Ukrainian (Ukraine)"},
+        {"ro-RO", "Romanian (Romania)"},
+        {"bg-BG", "Bulgarian (Bulgaria)"},
+        {"hr-HR", "Croatian (Croatia)"},
+        {"sr-RS", "Serbian (Serbia)"},
+        {"sk-SK", "Slovak (Slovakia)"},
+        {"sl-SI", "Slovenian (Slovenia)"},
+        {"et-EE", "Estonian (Estonia)"},
+        {"lv-LV", "Latvian (Latvia)"},
+        {"lt-LT", "Lithuanian (Lithuania)"},
+        {"af-ZA", "Afrikaans (South Africa)"},
+        {"is-IS", "Icelandic (Iceland)"},
+        {"mt-MT", "Maltese (Malta)"},
+        {"cy-GB", "Welsh (United Kingdom)"},
+        {"eu-ES", "Basque (Spain)"},
+        {"ca-ES", "Catalan (Spain)"},
+        {"gl-ES", "Galician (Spain)"}
     };
 }
