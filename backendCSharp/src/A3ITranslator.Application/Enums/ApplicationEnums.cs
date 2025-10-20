@@ -1,4 +1,4 @@
-namespace A3ITranslator.Domain.Enums;
+namespace A3ITranslator.Application.Enums;
 
 /// <summary>
 /// Supported user tiers for service differentiation
@@ -35,10 +35,9 @@ public enum SessionState
 /// </summary>
 public enum MessageType
 {
-    Transcription = 0,
-    Translation = 1,
-    AIResponse = 2,
-    AIResponseTranslated = 3
+    Translation = 0,
+    AIResponse = 1,
+    Transcription = 2,
 }
 
 /// <summary>
@@ -75,10 +74,11 @@ public enum TTSProvider
 /// </summary>
 public enum AIProvider
 {
-    Gemini = 0,
-    Claude = 1,
+    AzureOpenAI = 0,
+    Gemini = 1,
     OpenAI = 2,
-    AzureOpenAI = 3
+    Claude = 3
+    
 }
 
 /// <summary>

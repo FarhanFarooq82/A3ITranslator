@@ -1,3 +1,16 @@
+const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+
+export interface BackendSessionResponse {
+  success: boolean;
+  sessionId: string;
+  createdAt: string;
+  expiresAt: string;
+  mainLanguage: string;
+  otherLanguage: string;
+  isPremium: boolean;
+  message?: string;
+}
+
 export class SessionService {
   private readonly storageKey = 'a3i_session';
   private readonly sessionDuration = 2 * 60 * 60 * 1000; // 2 hours
@@ -6,16 +19,21 @@ export class SessionService {
     return this.sessionDuration;
   }
 
-  generateSessionId(): string {
-    return (
-      Date.now().toString(36) +
-      '-' +
-      Math.random().toString(36).substring(2, 10)
-    );
+  async createSessionOnBackend(mainLanguage: string, otherLanguage: string, isPremium: boolean): Promise<BackendSessionResponse> {
+    const response = await fetch(`${API_BASE_URL}/api/session/create`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ mainLanguage, otherLanguage, isPremium }),
+    });
+    if (!response.ok) {
+      throw new Error('Failed to create session: ' + response.statusText);
+    }
+    return await response.json();
   }
 
-  saveSession(id: string, additionalData: Record<string, unknown> = {}): void {
-    const expiry = Date.now() + this.sessionDuration;
+  saveSession(id: string, expiry: number, additionalData: Record<string, unknown> = {}): void {
     localStorage.setItem(
       this.storageKey,
       JSON.stringify({ 

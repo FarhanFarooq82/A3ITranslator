@@ -1,7 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\A3ITranslator.Domain\A3ITranslator.Domain.csproj" />
     <ProjectReference Include="..\A3ITranslator.Application\A3ITranslator.Application.csproj" />
   </ItemGroup>
 

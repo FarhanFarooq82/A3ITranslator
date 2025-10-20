@@ -4,6 +4,8 @@ using A3ITranslator.Infrastructure.Services.Azure;
 using A3ITranslator.Infrastructure.Services.Google;
 using A3ITranslator.Infrastructure.Services.OpenAI;
 using A3ITranslator.Infrastructure.Services.GenAI;
+using A3ITranslator.Infrastructure.Services.Session;
+using A3ITranslator.Infrastructure.Services.Language;
 using A3ITranslator.Infrastructure.Configuration;
 
 // A3I Translator API with comprehensive multi-provider language service support
@@ -32,6 +34,9 @@ builder.Services.AddTransient<IGenAIService, OpenAIGenAIService>();
 
 // Language aggregation service with all providers - SINGLETON for caching
 builder.Services.AddSingleton<ILanguageService, LanguageService>();
+
+// Session management service
+builder.Services.AddScoped<ISessionService, InMemorySessionService>();
 
 // CORS for frontend testing
 builder.Services.AddCors(options =>
@@ -68,9 +73,14 @@ logger.LogInformation("Available endpoints:");
 logger.LogInformation("- GET  /languages/all (All supported languages)");
 logger.LogInformation("- GET  /languages/stt (STT languages)");
 logger.LogInformation("- GET  /languages/tts (TTS languages)");
-logger.LogInformation("- GenAI services available (Azure OpenAI, Gemini, OpenAI GPT)");
 logger.LogInformation("- GET  /languages/common (Common languages)");
 logger.LogInformation("- POST /process-audio (Audio processing)");
+logger.LogInformation("- POST /api/session/create (Create session)");
+logger.LogInformation("- DELETE /api/session/{{id}} (End session)");
+logger.LogInformation("- POST /api/conversation/sync (Sync conversation)");
+logger.LogInformation("- GET  /api/conversation/load/{{id}} (Load conversation)");
+logger.LogInformation("- DELETE /api/conversation/delete/{{id}} (Delete conversation)");
+logger.LogInformation("- GenAI services available (Azure OpenAI, Gemini, OpenAI GPT)");
 logger.LogInformation("- Swagger UI: http://localhost:8000/swagger");
 logger.LogInformation("=== A3I Translator API Ready ===");
 

@@ -1,4 +1,4 @@
-using A3ITranslator.Domain.Enums;
+using A3ITranslator.Application.Enums;
 
 namespace A3ITranslator.Application.DTOs.Speaker;
 
@@ -6,7 +6,7 @@ namespace A3ITranslator.Application.DTOs.Speaker;
 /// Consolidated Speaker DTO - replaces both SpeakerInfo and SpeakerDto
 /// Contains all speaker-related information for identification and display
 /// </summary>
-public class SpeakerDto
+public class SpeakerInfo
 {
     public string SpeakerId { get; set; } = string.Empty;
     public string? SpeakerName { get; set; }

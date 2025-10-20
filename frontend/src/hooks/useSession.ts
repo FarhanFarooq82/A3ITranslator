@@ -12,24 +12,40 @@ export const useSession = () => {
   const sessionService = useMemo(() => new SessionService(), []);
 
   // Actions
-  const startSession = useCallback(() => {
-    const id = sessionService.generateSessionId();
-    const expiry = Date.now() + sessionService.getSessionDuration();
-    
-    // Save session to local storage with additional data
-    sessionService.saveSession(id, {
-      mainLanguage: state.mainLanguage,
-      otherLanguage: state.otherLanguage,
-      isPremium: state.isPremium,
-      sessionState: SessionState.ACTIVE
-    });
-    
-    // Update state
-    dispatch({
-      type: ActionType.START_SESSION,
-      id,
-      expiry
-    });
+  const startSession = useCallback(async () => {
+    try {
+      // Call backend to create session
+      const backendSession = await sessionService.createSessionOnBackend(
+        state.mainLanguage,
+        state.otherLanguage,
+        state.isPremium
+      );
+      
+      if (!backendSession.success) {
+        throw new Error(backendSession.message || 'Session creation failed');
+      }
+      
+      const sessionId = backendSession.sessionId;
+      const expiry = new Date(backendSession.expiresAt).getTime();
+      
+      // Save session to local storage with additional data
+      sessionService.saveSession(sessionId, expiry, {
+        mainLanguage: state.mainLanguage,
+        otherLanguage: state.otherLanguage,
+        isPremium: state.isPremium,
+        sessionState: SessionState.ACTIVE
+      });
+      
+      // Update state
+      dispatch({
+        type: ActionType.START_SESSION,
+        id: sessionId,
+        expiry
+      });
+    } catch (error) {
+      console.error('Failed to start session:', error);
+      // Optionally dispatch an error action or show notification
+    }
   }, [dispatch, sessionService, state.mainLanguage, state.otherLanguage, state.isPremium]);
 
   const endSession = useCallback(() => {

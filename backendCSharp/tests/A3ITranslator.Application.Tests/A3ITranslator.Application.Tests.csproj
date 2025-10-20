@@ -21,7 +21,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\A3ITranslator.Application\A3ITranslator.Application.csproj" />
-    <ProjectReference Include="..\..\src\A3ITranslator.Domain\A3ITranslator.Domain.csproj" />
   </ItemGroup>
 
 </Project>

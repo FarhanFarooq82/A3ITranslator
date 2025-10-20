@@ -1,6 +1,6 @@
 using A3ITranslator.Application.Services;
 
-namespace A3ITranslator.Application.Services;
+namespace A3ITranslator.Infrastructure.Services.Language;
 
 /// <summary>
 /// Simplified Language service - combines STT languages from all providers

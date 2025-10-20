@@ -1,4 +1,4 @@
-using A3ITranslator.Domain.Enums;
+using A3ITranslator.Application.Enums;
 
 namespace A3ITranslator.Application.DTOs.Audio;
 
