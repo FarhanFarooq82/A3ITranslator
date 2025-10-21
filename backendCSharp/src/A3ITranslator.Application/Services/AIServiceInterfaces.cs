@@ -26,6 +26,25 @@ public interface ISTTService
     /// Check if the service is healthy and available
     /// </summary>
     Task<bool> CheckHealthAsync();
+    
+    /// <summary>
+    /// Indicates if this service supports language detection
+    /// </summary>
+    bool SupportsLanguageDetection { get; }
+    
+    /// <summary>
+    /// Indicates if this service requires audio format conversion
+    /// </summary>
+    bool RequiresAudioConversion { get; }
+    
+    /// <summary>
+    /// Transcribe audio with language detection (fallback-ready method)
+    /// </summary>
+    Task<DTOs.Audio.STTResult> TranscribeWithDetectionAsync(
+        byte[] audio,
+        string[] candidateLanguages,
+        CancellationToken cancellationToken = default
+    );
 }
 
 /// <summary>

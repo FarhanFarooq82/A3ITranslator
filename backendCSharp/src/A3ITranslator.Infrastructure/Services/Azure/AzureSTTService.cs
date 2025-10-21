@@ -1,8 +1,11 @@
 using A3ITranslator.Application.Services;
 using A3ITranslator.Application.Common;
+using A3ITranslator.Application.DTOs.Audio;
 using A3ITranslator.Infrastructure.Configuration;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Logging;
+using Microsoft.CognitiveServices.Speech;
+using Microsoft.CognitiveServices.Speech.Audio;
 
 namespace A3ITranslator.Infrastructure.Services.Azure;
 
@@ -34,8 +37,18 @@ public class AzureSTTService : ISTTService
     /// </summary>
     public string GetServiceName()
     {
-        return "Azure Speech-to-Text";
+        return "Azure STT";
     }
+
+    /// <summary>
+    /// Azure STT supports language detection
+    /// </summary>
+    public bool SupportsLanguageDetection => true;
+
+    /// <summary>
+    /// Azure STT requires WAV format conversion
+    /// </summary>
+    public bool RequiresAudioConversion => true;
 
     /// <summary>
     /// Convert speech to text - placeholder implementation
@@ -45,6 +58,174 @@ public class AzureSTTService : ISTTService
         // Language Foundation - placeholder implementation
         await Task.Delay(100); // Simulate processing
         return Result<string>.Success($"Azure STT placeholder for language {languageCode}");
+    }
+
+    /// <summary>
+    /// Transcribe audio with language detection and speaker identification using Azure Speech SDK
+    /// </summary>
+    public async Task<STTResult> TranscribeWithDetectionAsync(
+        byte[] audio,
+        string[] candidateLanguages,
+        CancellationToken cancellationToken = default)
+    {
+        _logger.LogDebug("Azure STT transcribing audio with {CandidateCount} candidate languages", candidateLanguages.Length);
+
+        var startTime = DateTime.UtcNow;
+
+        try
+        {
+            // Validate credentials
+            if (string.IsNullOrEmpty(_options.Azure.SpeechKey) || string.IsNullOrEmpty(_options.Azure.SpeechRegion))
+            {
+                return new STTResult
+                {
+                    Success = false,
+                    ErrorMessage = "Azure Speech credentials not configured",
+                    Provider = GetServiceName()
+                };
+            }
+
+            // Create Azure Speech configuration
+            var speechConfig = Microsoft.CognitiveServices.Speech.SpeechConfig.FromSubscription(
+                _options.Azure.SpeechKey, 
+                _options.Azure.SpeechRegion);
+
+            // Set language detection for multiple languages or use first candidate
+            if (candidateLanguages.Length > 1)
+            {
+                // Enable auto language detection for multiple candidates
+                var autoDetectSourceLanguageConfig = Microsoft.CognitiveServices.Speech.AutoDetectSourceLanguageConfig.FromLanguages(candidateLanguages);
+                speechConfig.SetProperty(Microsoft.CognitiveServices.Speech.PropertyId.SpeechServiceConnection_LanguageIdMode, "Continuous");
+            }
+            else if (candidateLanguages.Length == 1)
+            {
+                speechConfig.SpeechRecognitionLanguage = candidateLanguages[0];
+            }
+            else
+            {
+                speechConfig.SpeechRecognitionLanguage = "en-US"; // Default
+            }
+
+            // Enable speaker diarization
+            speechConfig.SetProperty("DiarizationEnabled", "true");
+            speechConfig.SetProperty("DiarizationMinSpeakerCount", "1");
+            speechConfig.SetProperty("DiarizationMaxSpeakerCount", "6");
+
+            // Create audio input from byte array
+            using var audioInputStream = Microsoft.CognitiveServices.Speech.Audio.AudioInputStream.CreatePushStream();
+            using var audioConfig = Microsoft.CognitiveServices.Speech.Audio.AudioConfig.FromStreamInput(audioInputStream);
+            
+            // Push audio data
+            audioInputStream.Write(audio);
+            audioInputStream.Close();
+
+            // Create speech recognizer
+            using var recognizer = candidateLanguages.Length > 1 
+                ? new Microsoft.CognitiveServices.Speech.SpeechRecognizer(speechConfig, 
+                    Microsoft.CognitiveServices.Speech.AutoDetectSourceLanguageConfig.FromLanguages(candidateLanguages), 
+                    audioConfig)
+                : new Microsoft.CognitiveServices.Speech.SpeechRecognizer(speechConfig, audioConfig);
+
+            // Perform recognition
+            var result = await recognizer.RecognizeOnceAsync();
+            var processingTime = (DateTime.UtcNow - startTime).TotalMilliseconds;
+
+            if (result.Reason == Microsoft.CognitiveServices.Speech.ResultReason.RecognizedSpeech)
+            {
+                // Extract language detection result
+                var detectedLanguage = candidateLanguages.FirstOrDefault() ?? "en-US";
+                if (candidateLanguages.Length > 1)
+                {
+                    // Try to get detected language from properties
+                    var langResult = result.Properties.GetProperty(Microsoft.CognitiveServices.Speech.PropertyId.SpeechServiceConnection_AutoDetectSourceLanguageResult);
+                    if (!string.IsNullOrEmpty(langResult))
+                    {
+                        detectedLanguage = langResult;
+                    }
+                }
+
+                // Extract word-level information for speaker diarization
+                var words = new List<WordInfo>();
+                if (result.Best().Any())
+                {
+                    foreach (var wordResult in result.Best().First().Words)
+                    {
+                        words.Add(new WordInfo
+                        {
+                            Word = wordResult.Word,
+                            StartTime = TimeSpan.FromTicks((long)(wordResult.Offset * 10)), // Convert from 100ns units
+                            EndTime = TimeSpan.FromTicks((long)((wordResult.Offset + wordResult.Duration) * 10)),
+                            Confidence = (float)wordResult.Confidence,
+                            SpeakerTag = 1, // Azure returns speaker info differently
+                            SpeakerLabel = "Speaker1" // Default for single speaker
+                        });
+                    }
+                }
+
+                // Basic speaker analysis (Azure doesn't provide gender/age directly)
+                var speakerAnalysis = new SpeakerAnalysis
+                {
+                    Language = detectedLanguage,
+                    SpeakerTag = 1,
+                    SpeakerLabel = "Speaker1",
+                    Confidence = 0.8f, // Default confidence as Azure doesn't provide this directly
+                    Gender = "NEUTRAL", // Azure doesn't provide this directly
+                    EstimatedAgeRange = "adult", // Default assumption
+                    IsKnownSpeaker = false
+                };
+
+                return new STTResult
+                {
+                    Success = true,
+                    Transcription = result.Text,
+                    DetectedLanguage = detectedLanguage,
+                    Confidence = 0.8f, // Default confidence as Azure doesn't provide this directly
+                    Provider = GetServiceName(),
+                    ProcessingTimeMs = processingTime,
+                    SpeakerAnalysis = speakerAnalysis,
+                    Words = words
+                };
+            }
+            else
+            {
+                var errorMsg = result.Reason switch
+                {
+                    Microsoft.CognitiveServices.Speech.ResultReason.NoMatch => "No speech recognized",
+                    Microsoft.CognitiveServices.Speech.ResultReason.Canceled => $"Recognition cancelled: {Microsoft.CognitiveServices.Speech.CancellationDetails.FromResult(result).Reason}",
+                    _ => "Recognition failed"
+                };
+
+                return new STTResult
+                {
+                    Success = false,
+                    ErrorMessage = errorMsg,
+                    Provider = GetServiceName(),
+                    ProcessingTimeMs = processingTime
+                };
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning("Azure STT transcription was cancelled");
+            return new STTResult
+            {
+                Success = false,
+                ErrorMessage = "Transcription was cancelled",
+                Provider = GetServiceName()
+            };
+        }
+        catch (Exception ex)
+        {
+            var processingTime = (DateTime.UtcNow - startTime).TotalMilliseconds;
+            _logger.LogError(ex, "Azure STT transcription failed");
+            return new STTResult
+            {
+                Success = false,
+                ErrorMessage = $"Azure STT failed: {ex.Message}",
+                Provider = GetServiceName(),
+                ProcessingTimeMs = processingTime
+            };
+        }
     }
 
     /// <summary>

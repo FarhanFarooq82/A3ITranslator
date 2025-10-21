@@ -17,11 +17,15 @@ public class InMemorySessionService : ISessionService
 {
     private readonly ConcurrentDictionary<string, SessionModel> _sessions = new();
     private readonly ILogger<InMemorySessionService> _logger;
+    private readonly ISTTProviderSelector _providerSelector;
     private readonly Timer _cleanupTimer;
 
-    public InMemorySessionService(ILogger<InMemorySessionService> logger)
+    public InMemorySessionService(
+        ILogger<InMemorySessionService> logger,
+        ISTTProviderSelector providerSelector)
     {
         _logger = logger;
+        _providerSelector = providerSelector;
         
         // Set up cleanup timer - runs every 30 minutes
         _cleanupTimer = new Timer(CleanupExpiredSessions, null, 
@@ -35,6 +39,12 @@ public class InMemorySessionService : ISessionService
             var sessionId = Guid.NewGuid().ToString();
             var now = DateTime.UtcNow;
 
+            // Assign providers based on language pair support
+            var assignedSTTProviders = _providerSelector.GetAssignedSTTProvidersForSession(request.MainLanguage, request.OtherLanguage);
+            var preferredSTTProvider = _providerSelector.GetPreferredSTTProviderForSession(request.MainLanguage, request.OtherLanguage);
+            var assignedTTSProviders = _providerSelector.GetAssignedTTSProvidersForSession(request.MainLanguage, request.OtherLanguage);
+            var preferredTTSProvider = _providerSelector.GetPreferredTTSProviderForSession(request.MainLanguage, request.OtherLanguage);
+
             var session = new SessionModel
             {
                 Id = sessionId,
@@ -46,7 +56,11 @@ public class InMemorySessionService : ISessionService
                 LastActivity = now,
                 ExpiresAt = now.AddHours(4), // 4 hour session timeout
                 MessageCount = 0,
-                FactsCount = 0
+                FactsCount = 0,
+                AssignedSTTProviders = assignedSTTProviders,
+                AssignedTTSProviders = assignedTTSProviders,
+                PreferredSTTProvider = preferredSTTProvider,
+                PreferredTTSProvider = preferredTTSProvider
             };
 
             _sessions[sessionId] = session;
@@ -61,7 +75,8 @@ public class InMemorySessionService : ISessionService
                 ExpiresAt = session.ExpiresAt
             };
 
-            _logger.LogInformation("Created session {SessionId}", sessionId);
+            _logger.LogInformation("Created session {SessionId} with STT providers: [{STTProviders}], TTS providers: [{TTSProviders}]", 
+                sessionId, string.Join(", ", assignedSTTProviders), string.Join(", ", assignedTTSProviders));
             return await Task.FromResult(Result<SessionResponse>.Success(sessionDto));
         }
         catch (Exception ex)
@@ -70,6 +85,25 @@ public class InMemorySessionService : ISessionService
             return Result<SessionResponse>.Failure("Failed to create session", ex);
         }
     }
+    public async Task<Result<SessionModel>> GetSessionAsync(string sessionId)
+    {
+        try
+        {
+            if (!_sessions.TryGetValue(sessionId, out var session))
+            {
+                return Result<SessionModel>.Failure("Session not found");
+            }
+
+            await UpdateSessionActivityAsync(sessionId);
+            return await Task.FromResult(Result<SessionModel>.Success(session));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting session {SessionId}", sessionId);
+            return Result<SessionModel>.Failure("Failed to get session", ex);
+        }
+    }
+
     public async Task<Result<List<ConversationMessageModel>>> GetSessionMessagesAsync(string sessionId)
     {
         try

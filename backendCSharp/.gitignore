@@ -42,6 +42,18 @@ obj/
 *.docx
 .vs/
 
+# Template and scaffolding files
+**/Class1.cs
+**/UnitTest1.cs
+**/WeatherForecast.cs
+**/Step2.cs
+**/Empty*.cs
+
+# Empty template directories
+src/A3ITranslator.Domain/
+tests/A3ITranslator.Domain.Tests/
+**/.template.config/
+
 # Build results
 [Dd]ebug/
 [Dd]ebugPublic/

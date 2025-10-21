@@ -6,6 +6,7 @@ using A3ITranslator.Infrastructure.Services.OpenAI;
 using A3ITranslator.Infrastructure.Services.GenAI;
 using A3ITranslator.Infrastructure.Services.Session;
 using A3ITranslator.Infrastructure.Services.Language;
+using A3ITranslator.Infrastructure.Services.Audio;
 using A3ITranslator.Infrastructure.Configuration;
 
 // A3I Translator API with comprehensive multi-provider language service support
@@ -34,6 +35,10 @@ builder.Services.AddTransient<IGenAIService, OpenAIGenAIService>();
 
 // Language aggregation service with all providers - SINGLETON for caching
 builder.Services.AddSingleton<ILanguageService, LanguageService>();
+
+// Audio processing services - Phase 1 implementation
+builder.Services.AddScoped<ISTTProviderSelector, STTProviderSelector>();
+builder.Services.AddScoped<IAudioProcessingOrchestrator, AudioProcessingOrchestrator>();
 
 // Session management service
 builder.Services.AddScoped<ISessionService, InMemorySessionService>();

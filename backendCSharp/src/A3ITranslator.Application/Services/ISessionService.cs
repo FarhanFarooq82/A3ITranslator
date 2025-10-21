@@ -11,6 +11,7 @@ namespace A3ITranslator.Application.Services;
 public interface ISessionService
 {
     Task<Result<SessionResponse>> CreateSessionAsync(SessionRequest request);
+    Task<Result<SessionModel>> GetSessionAsync(string sessionId);
     Task<Result<List<ConversationMessageModel>>> GetSessionMessagesAsync(string sessionId);
     Task<Result> UpdateSessionActivityAsync(string sessionId);
     Task<Result> AddFactToSessionAsync(string sessionId, string key, object value);

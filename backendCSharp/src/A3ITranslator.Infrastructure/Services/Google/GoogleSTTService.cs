@@ -1,8 +1,11 @@
 using A3ITranslator.Application.Services;
 using A3ITranslator.Application.Common;
+using A3ITranslator.Application.DTOs.Audio;
 using A3ITranslator.Infrastructure.Configuration;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Logging;
+using Google.Cloud.Speech.V1;
+using Google.Protobuf;
 
 namespace A3ITranslator.Infrastructure.Services.Google;
 
@@ -34,8 +37,18 @@ public class GoogleSTTService : ISTTService
     /// </summary>
     public string GetServiceName()
     {
-        return "Google Speech-to-Text";
+        return "Google STT";
     }
+
+    /// <summary>
+    /// Google STT supports language detection
+    /// </summary>
+    public bool SupportsLanguageDetection => true;
+
+    /// <summary>
+    /// Google STT supports native audio formats
+    /// </summary>
+    public bool RequiresAudioConversion => false;
 
     /// <summary>
     /// Convert speech to text - placeholder for Phase 2
@@ -45,6 +58,173 @@ public class GoogleSTTService : ISTTService
         // Phase 1: Language Foundation - placeholder implementation
         await Task.Delay(100); // Simulate processing
         return Result<string>.Success($"[Phase 1] Google STT placeholder for language {languageCode}");
+    }
+
+    /// <summary>
+    /// Transcribe audio with language detection and speaker identification using Google Cloud Speech
+    /// </summary>
+    public async Task<STTResult> TranscribeWithDetectionAsync(
+        byte[] audio,
+        string[] candidateLanguages,
+        CancellationToken cancellationToken = default)
+    {
+        _logger.LogDebug("Google STT transcribing audio with {CandidateCount} candidate languages", candidateLanguages.Length);
+
+        var startTime = DateTime.UtcNow;
+
+        try
+        {
+            // Validate credentials
+            if (string.IsNullOrEmpty(_options.Google.CredentialsPath))
+            {
+                return new STTResult
+                {
+                    Success = false,
+                    ErrorMessage = "Google Cloud credentials not configured",
+                    Provider = GetServiceName()
+                };
+            }
+
+            // Set credentials environment variable
+            Environment.SetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS", _options.Google.CredentialsPath);
+
+            // Create Google Speech client
+            var speechClient = SpeechClient.Create();
+
+            // Configure recognition settings
+            var config = new RecognitionConfig
+            {
+                Encoding = RecognitionConfig.Types.AudioEncoding.WebmOpus,
+                SampleRateHertz = 48000, // Default for WebM
+                AudioChannelCount = 1,
+                EnableAutomaticPunctuation = true,
+                EnableWordTimeOffsets = true,
+                EnableWordConfidence = true,
+                Model = "latest_long", // Best model for accuracy
+                UseEnhanced = true
+            };
+
+            // Configure language detection
+            if (candidateLanguages.Length > 1)
+            {
+                // Enable auto language detection
+                foreach (var lang in candidateLanguages)
+                {
+                    config.AlternativeLanguageCodes.Add(lang);
+                }
+                config.LanguageCode = candidateLanguages[0]; // Primary language
+            }
+            else if (candidateLanguages.Length == 1)
+            {
+                config.LanguageCode = candidateLanguages[0];
+            }
+            else
+            {
+                config.LanguageCode = "en-US"; // Default
+            }
+
+            // Enable speaker diarization
+            config.DiarizationConfig = new SpeakerDiarizationConfig
+            {
+                EnableSpeakerDiarization = true,
+                MinSpeakerCount = 1,
+                MaxSpeakerCount = 6
+            };
+
+            // Create recognition request
+            var request = new RecognizeRequest
+            {
+                Config = config,
+                Audio = new RecognitionAudio
+                {
+                    Content = ByteString.CopyFrom(audio)
+                }
+            };
+
+            // Perform recognition
+            var response = await speechClient.RecognizeAsync(request, cancellationToken);
+            var processingTime = (DateTime.UtcNow - startTime).TotalMilliseconds;
+
+            if (response.Results.Count > 0)
+            {
+                var result = response.Results[0];
+                var alternative = result.Alternatives[0];
+
+                // Extract detected language
+                var detectedLanguage = result.LanguageCode ?? candidateLanguages.FirstOrDefault() ?? "en-US";
+
+                // Extract word-level information with speaker labels
+                var words = new List<Application.DTOs.Audio.WordInfo>();
+                foreach (var word in alternative.Words)
+                {
+                    words.Add(new Application.DTOs.Audio.WordInfo
+                    {
+                        Word = word.Word,
+                        StartTime = TimeSpan.FromSeconds(word.StartTime?.Seconds ?? 0).Add(TimeSpan.FromMilliseconds((word.StartTime?.Nanos ?? 0) / 1000000.0)),
+                        EndTime = TimeSpan.FromSeconds(word.EndTime?.Seconds ?? 0).Add(TimeSpan.FromMilliseconds((word.EndTime?.Nanos ?? 0) / 1000000.0)),
+                        Confidence = word.Confidence,
+                        SpeakerTag = word.SpeakerTag,
+                        SpeakerLabel = word.SpeakerLabel ?? $"Speaker{word.SpeakerTag}"
+                    });
+                }
+
+                // Analyze speaker information
+                var speakerAnalysis = new SpeakerAnalysis
+                {
+                    Language = detectedLanguage,
+                    SpeakerTag = words.FirstOrDefault()?.SpeakerTag ?? 1,
+                    SpeakerLabel = words.FirstOrDefault()?.SpeakerLabel ?? "Speaker1",
+                    Confidence = alternative.Confidence,
+                    Gender = "NEUTRAL", // Google doesn't provide gender directly
+                    EstimatedAgeRange = "adult", // Default assumption
+                    IsKnownSpeaker = false
+                };
+
+                return new STTResult
+                {
+                    Success = true,
+                    Transcription = alternative.Transcript,
+                    DetectedLanguage = detectedLanguage,
+                    Confidence = alternative.Confidence,
+                    Provider = GetServiceName(),
+                    ProcessingTimeMs = processingTime,
+                    SpeakerAnalysis = speakerAnalysis,
+                    Words = words
+                };
+            }
+            else
+            {
+                return new STTResult
+                {
+                    Success = false,
+                    ErrorMessage = "No speech recognized",
+                    Provider = GetServiceName(),
+                    ProcessingTimeMs = processingTime
+                };
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning("Google STT transcription was cancelled");
+            return new STTResult
+            {
+                Success = false,
+                ErrorMessage = "Transcription was cancelled",
+                Provider = GetServiceName()
+            };
+        }
+        catch (Exception ex)
+        {
+            var processingTime = (DateTime.UtcNow - startTime).TotalMilliseconds;
+            _logger.LogError(ex, "Google STT transcription failed");
+            return new STTResult
+            {
+                Success = false,
+                ErrorMessage = $"Google STT failed: {ex.Message}",
+                Provider = GetServiceName(),
+                ProcessingTimeMs = processingTime
+            };
+        }
     }
 
     /// <summary>

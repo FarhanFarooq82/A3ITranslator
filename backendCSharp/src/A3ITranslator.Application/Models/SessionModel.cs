@@ -21,6 +21,12 @@ public class SessionModel
     public int FactsCount { get; set; }
     public int NextSpeakerNumber { get; set; } = 1;
 
+    // Provider assignments for this session based on language pair
+    public List<string> AssignedSTTProviders { get; set; } = new(); // Ordered by priority
+    public List<string> AssignedTTSProviders { get; set; } = new(); // Ordered by priority
+    public string PreferredSTTProvider { get; set; } = string.Empty; // Primary STT provider
+    public string PreferredTTSProvider { get; set; } = string.Empty; // Primary TTS provider
+
     // Collections
     public List<ConversationMessageModel> Messages { get; set; } = new();
     public Dictionary<string, object> Facts { get; set; } = new();
